@@ -33,7 +33,28 @@ class LightBridge(private val activity: MainActivity, private val web: WebView) 
     private val conn = LightConnection(
         onData = { bytes -> event(JSONObject().put("type", "data").put("hex", toHex(bytes))) },
         onClosed = { reason -> event(JSONObject().put("type", "closed").put("reason", reason)) },
+        newSocket = { wifiSocket() },
     )
+
+    private val cm get() = activity.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+
+    /**
+     * The real WiFi network (the light's hotspot or your home WiFi). A VPN
+     * also reports the WiFi transport of the network under it, so it has to
+     * be excluded explicitly; mobile data is never where the light is.
+     */
+    private fun wifiNetwork(): android.net.Network? = cm.allNetworks.firstOrNull { n ->
+        val c = cm.getNetworkCapabilities(n) ?: return@firstOrNull false
+        c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) && !c.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+    }
+
+    private fun vpnActive(): Boolean = cm.allNetworks.any {
+        cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+    }
+
+    /** A socket that goes out over WiFi, not through a VPN or mobile data. */
+    private fun wifiSocket(): java.net.Socket =
+        try { wifiNetwork()?.socketFactory?.createSocket() } catch (_: Exception) { null } ?: java.net.Socket()
 
     @Volatile
     private var espTask: IEsptouchTask? = null
@@ -82,23 +103,19 @@ class LightBridge(private val activity: MainActivity, private val web: WebView) 
     private fun currentNet(): Net = netFromLinks().copy(dhcpServer = dhcpServer())
 
     private fun netFromLinks(): Net {
-        val cm = activity.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        // prefer the WiFi network: the light is never on mobile data
-        val network = cm.allNetworks.firstOrNull {
-            cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
-        } ?: cm.activeNetwork
-        val lp: LinkProperties? = network?.let { cm.getLinkProperties(it) }
-        val wifi = network?.let { cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) } == true
+        val network = wifiNetwork() ?: return Net(null, 24, null, false)
+        val lp: LinkProperties? = cm.getLinkProperties(network)
         val la = lp?.linkAddresses?.firstOrNull { it.address is Inet4Address }
-        val gw = lp?.routes?.firstOrNull { it.isDefaultRoute && it.gateway is Inet4Address }?.gateway?.hostAddress
-        return Net(la?.address?.hostAddress, la?.prefixLength ?: 24, gw, wifi)
+        val gw = lp?.routes?.firstOrNull { it.isDefaultRoute && it.gateway is Inet4Address && !it.gateway!!.isAnyLocalAddress }
+            ?.gateway?.hostAddress
+        return Net(la?.address?.hostAddress, la?.prefixLength ?: 24, gw, true)
     }
 
     @JavascriptInterface
     fun netInfo(id: Int) = work.execute {
         val n = currentNet()
         resolve(id, JSONObject().put("ip", n.ip).put("prefix", n.prefix).put("gateway", n.gateway)
-            .put("dhcpServer", n.dhcpServer).put("wifi", n.wifi).toString())
+            .put("dhcpServer", n.dhcpServer).put("wifi", n.wifi).put("vpn", vpnActive()).toString())
     }
 
     @JavascriptInterface
@@ -109,7 +126,7 @@ class LightBridge(private val activity: MainActivity, private val web: WebView) 
             // the light's own hotspot hands out addresses with the light as gateway
             val extras = listOfNotNull(n.dhcpServer, n.gateway, "192.168.4.1")
             val hosts = NetScanner.candidates(n.ip, n.prefix, extras)
-            resolve(id, JSONArray(NetScanner.scan(hosts, port, timeoutMs)).toString())
+            resolve(id, JSONArray(NetScanner.scan(hosts, port, timeoutMs, newSocket = { wifiSocket() })).toString())
         } catch (e: Exception) {
             reject(id, e.message ?: "Scan failed")
         }

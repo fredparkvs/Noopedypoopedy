@@ -27,18 +27,18 @@ object NetScanner {
         return out.toList()
     }
 
-    fun isOpen(host: String, port: Int, timeoutMs: Int): Boolean = try {
-        Socket().use { it.connect(InetSocketAddress(host, port), timeoutMs); true }
+    fun isOpen(host: String, port: Int, timeoutMs: Int, newSocket: () -> Socket = { Socket() }): Boolean = try {
+        newSocket().use { it.connect(InetSocketAddress(host, port), timeoutMs); true }
     } catch (_: Exception) {
         false
     }
 
     /** Hosts with [port] open, in the order of [hosts]. */
-    fun scan(hosts: List<String>, port: Int, timeoutMs: Int, threads: Int = 48): List<String> {
+    fun scan(hosts: List<String>, port: Int, timeoutMs: Int, threads: Int = 48, newSocket: () -> Socket = { Socket() }): List<String> {
         if (hosts.isEmpty()) return emptyList()
         val pool = Executors.newFixedThreadPool(threads.coerceAtMost(hosts.size))
         try {
-            val futures = hosts.map { h -> pool.submit(Callable { if (isOpen(h, port, timeoutMs)) h else null }) }
+            val futures = hosts.map { h -> pool.submit(Callable { if (isOpen(h, port, timeoutMs, newSocket)) h else null }) }
             return futures.mapNotNull {
                 try { it.get(timeoutMs * 4L + 2000, TimeUnit.MILLISECONDS) } catch (_: Exception) { null }
             }

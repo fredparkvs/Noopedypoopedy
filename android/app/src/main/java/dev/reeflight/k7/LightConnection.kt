@@ -15,6 +15,8 @@ import kotlin.concurrent.thread
 class LightConnection(
     private val onData: (ByteArray) -> Unit,
     private val onClosed: (String) -> Unit,
+    /** Makes the unconnected socket; on Android this pins it to the WiFi network. */
+    private val newSocket: () -> Socket = { Socket() },
 ) {
     @Volatile
     private var socket: Socket? = null
@@ -24,7 +26,7 @@ class LightConnection(
     @Synchronized
     fun connect(host: String, port: Int, timeoutMs: Int) {
         close()
-        val s = Socket()
+        val s = newSocket()
         try {
             s.tcpNoDelay = true
             s.keepAlive = true
@@ -82,6 +84,8 @@ class LightConnection(
     }
 
     private fun friendly(e: IOException, host: String): String = when {
+        e.message?.contains("EPERM") == true || e.message?.contains("not permitted", ignoreCase = true) == true ->
+            "Android blocked the connection to $host. A VPN on this phone is probably sending all traffic through itself."
         e is java.net.SocketTimeoutException -> "No answer from $host. Is the light on and on this WiFi?"
         e is java.net.ConnectException -> "$host refused the connection. Close the official app if it is open."
         e is java.net.NoRouteToHostException -> "Cannot reach $host from this network."

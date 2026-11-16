@@ -3,7 +3,7 @@
   const P = window.NooProtocol;
   const S = window.NooSchedule;
   const { createTransport, LightLink } = window.NooTransport;
-  const VERSION = '1.0.2';
+  const VERSION = '1.0.3';
 
   // ---- storage ------------------------------------------------------------
   const store = {
@@ -53,6 +53,8 @@
     editingNew: false,
     previewOn: true,
     scanning: false,
+    silentHosts: [],
+    net: null,
     found: [],
     retries: 0
   };
@@ -208,6 +210,20 @@
     return state.net;
   }
 
+  /* Drop saved addresses that never answered as a light. */
+  function forgetUnconfirmed() {
+    lights().filter((l) => !l.name).forEach((l) => store.del('light:' + l.id));
+    saveLights(lights().filter((l) => l.name));
+    if (state.light && !state.light.name) { state.light = null; store.del('current'); }
+  }
+
+  function vpnNote() {
+    if (!state.net || !state.net.vpn) return '';
+    return '<div class="banner" style="display:block;border-color:#7a3b3b"><p style="margin:0 0 6px;color:var(--ink)"><strong>A VPN is switched on.</strong></p>' +
+      '<p style="margin:0">It sends this app\'s traffic through the VPN instead of to the light. Turn the VPN off while you adjust the light, ' +
+      'or in the VPN app exclude Reef Light (often called split tunnelling) or allow LAN connections.</p></div>';
+  }
+
   /* Is this address the light whose own hotspot the phone is on? */
   function viaHotspot(host) {
     const n = state.net;
@@ -217,6 +233,7 @@
   async function runDiscover() {
     state.scanning = true;
     state.found = [];
+    state.silentHosts = [];
     refreshLightsSheet();
     const wasHost = connected() ? link.host : null;
     const asked = new Set();
@@ -234,8 +251,9 @@
         const known = lights().find((l) => l.name && l.name === st.name);
         if (known && known.host !== host) upsertLight({ id: known.id, name: known.name, host, model: st.model });
       } catch (e) {
-        // the gateway of a normal home network is the router, not a light: do not list it
-        if (!direct) state.found.push({ host, name: null });
+        // something accepted the connection but did not answer like a light
+        // (a router, a VPN, another gadget): never offer it as a light
+        if (e.stage !== 'connect') state.silentHosts.push(host);
       } finally {
         link.quiet = false;
       }
@@ -246,6 +264,7 @@
       // On the light's own hotspot the light hands out the addresses, so ask
       // that address first, exactly like the official app's "AP connection".
       const net = await refreshNet();
+      if (state.view === 'schedule' && !state.editing) renderView(); // shows the VPN warning if there is one
       const direct = [net && net.dhcpServer, net && net.gateway].filter((h, i, a) => h && a.indexOf(h) === i);
       for (const host of direct) {
         if (state.scanAbort) break;
@@ -273,12 +292,14 @@
       refreshLightsSheet();
     }
 
-    // First run: if the answer is unambiguous, connect without making you tap.
-    if (!state.light && !state.scanAbort) {
+    // First run (or the saved "light" never answered): if the answer is
+    // unambiguous, connect without making you tap.
+    if ((!state.light || !state.light.name) && !state.scanAbort) {
       const named = state.found.filter((f) => f.name);
       const pick = state.found.find((f) => f.hotspot && f.name) || (named.length === 1 ? named[0] : null);
       if (pick) {
         closeSheet();
+        forgetUnconfirmed();
         const rec = upsertLight({ id: pick.name, name: pick.name, host: pick.host, model: pick.model || 'k7' });
         loadWorking(rec);
         toast('Found ' + pick.name + (pick.hotspot ? ' (you are on its hotspot)' : '') + '. Connecting.');
@@ -287,18 +308,23 @@
     }
   }
 
-  /* Make the light go dark twice, so you can see which light the app is talking to. */
+  /*
+   * Flash the light twice so you can see which light the app is talking to:
+   * dark if it is on, a gentle blue if it is off (at night "dark" would show
+   * nothing). Then put it back exactly as it was.
+   */
   async function blink() {
     if (!(await ensureConnected())) return;
-    toast('Watch the light: it should go dark twice.');
+    toast('Watch the light: it should flash twice.');
     const wasAuto = state.auto;
     const now = (wasAuto ? S.valueAt(state.points, nowMinutes()) : state.manual).map((x) => Math.round(x));
-    const off = [0, 0, 0, 0, 0, 0];
+    const isOn = Math.max.apply(null, now) >= 10;
+    const flash = isOn ? [0, 0, 0, 0, 0, 0] : (state.model === 'mini' ? [0, 30, 20, 0, 0, 0] : [0, 30, 0, 20, 30, 0]);
     const pause = (ms) => new Promise((r) => setTimeout(r, ms));
     try {
       if (wasAuto) await link.send(P.setAutoMode(false));
       for (let i = 0; i < 2; i++) {
-        await link.send(P.setManual(off));
+        await link.send(P.setManual(flash));
         await pause(900);
         await link.send(P.setManual(now));
         await pause(700);
@@ -541,6 +567,7 @@
   // ---- schedule view ------------------------------------------------------------------------------
   function silentBanner() {
     if (!state.readFailed || !connected()) return '';
+    if (state.net && state.net.vpn) return vpnNote();
     return '<div class="banner" style="display:block;border-color:#7a3b3b">' +
       '<p style="margin:0 0 8px;color:var(--ink)"><strong>The light accepted the connection but did not answer.</strong></p>' +
       '<p style="margin:0 0 8px">This usually means another app or phone is still connected to it, since the light only talks to one at a time. ' +
@@ -560,7 +587,7 @@
   function renderSchedule() {
     const v = $('view-schedule');
     if (!state.light) {
-      v.innerHTML = '<div class="card"><h2>Find your light</h2><p class="sub">Connect your phone to the light\'s own WiFi hotspot (named K7_ and some letters) in your phone\'s WiFi settings, as you do for the official app. If the light is on your home WiFi instead, stay on that.</p>' +
+      v.innerHTML = vpnNote() + '<div class="card"><h2>Find your light</h2><p class="sub">Connect your phone to the light\'s own WiFi hotspot (named K7_ and some letters) in your phone\'s WiFi settings, as you do for the official app. If the light is on your home WiFi instead, stay on that.</p>' +
         '<div class="btn-row"><button class="btn primary" data-action="lights">Find my light</button></div></div>' +
         '<div class="card"><h2>Preview</h2>' + '<div id="chartBox">' + chartSvg(state.points) + '</div></div>';
       return;
@@ -568,7 +595,7 @@
     const sorted = state.points.slice().sort((a, b) => a.t - b.t);
     const ch = channels();
     const conflictHours = S.conflicts(state.points);
-    let html = silentBanner();
+    let html = silentBanner() || (!connected() ? vpnNote() : '');
     if (!state.auto && !state.readFailed) html += '<div class="banner"><span><strong>Manual mode.</strong> The light is ignoring this schedule.</span><button class="btn small" data-action="run-schedule">Run schedule</button></div>';
     html += sourceNote();
     html += '<div class="card"><div class="row spread"><h2>Today</h2><span class="hint num" id="clock"></span></div>' +
@@ -902,11 +929,10 @@
   function lightsSheetBody() {
     const saved = lights();
     const cur = state.light && state.light.id;
-    const savedHosts = saved.map((l) => l.host);
-    const extra = state.found.filter((f) => !saved.some((l) => (f.name && l.name === f.name) || l.host === f.host));
-    let html = '';
+    const extra = state.found.filter((f) => f.name && !saved.some((l) => l.name === f.name || l.host === f.host));
+    let html = vpnNote();
     html += '<ul class="list">' + saved.map((l) => '<li><div><div class="main-t">' + esc(displayName(l)) + (l.id === cur ? ' <span class="hint">(current)</span>' : '') + '</div>' +
-      '<div class="sub-t num">' + esc(l.host) + (l.model === 'mini' ? ', K7 Mini' : '') + '</div></div>' +
+      '<div class="sub-t num">' + esc(l.host) + (l.model === 'mini' ? ', K7 Mini' : '') + (l.name ? '' : ', never answered') + '</div></div>' +
       '<div class="row"><button class="btn small" data-use="' + esc(l.id) + '">' + (l.id === cur ? 'Reconnect' : 'Use') + '</button>' +
       '<button class="btn small quiet" data-forget="' + esc(l.id) + '" aria-label="Forget ' + esc(displayName(l)) + '">Forget</button></div></li>').join('') + '</ul>';
     if (!saved.length) html += '<p class="hint" style="margin-top:0">No lights saved yet.</p>';
@@ -914,7 +940,13 @@
       html += '<h2 style="font-size:var(--fs-md);margin:14px 0 4px">Found on this network</h2><ul class="list">' + extra.map((f) => '<li><div><div class="main-t">' + esc(f.name || 'Unknown device') + '</div><div class="sub-t num">' + esc(f.host) + (f.hotspot ? ', you are on its hotspot' : '') + '</div></div>' +
         '<button class="btn small" data-add="' + esc(f.host) + '">Use</button></li>').join('') + '</ul>';
     }
-    if (state.found.length && !extra.length && !state.scanning) html += '<p class="hint">No other lights found.</p>';
+    if (!state.scanning && state.scanPromise && !state.found.some((f) => f.name)) {
+      html += '<p class="err" style="margin-top:12px">No light answered.' +
+        (state.silentHosts.length ? ' (' + state.silentHosts.length + ' other device' + (state.silentHosts.length > 1 ? 's' : '') + ' on this network did not answer like a light.)' : '') + '</p>' +
+        '<p class="hint">Check that your phone is joined to the light\'s own WiFi (named K7_ and some letters), that the official app is force-stopped, and that no VPN is on.</p>';
+    } else if (state.found.some((f) => f.name) && !extra.length && !state.scanning) {
+      html += '<p class="hint">No other lights found.</p>';
+    }
     html += '<div class="btn-row" style="margin-top:14px"><button class="btn primary" id="lsScan"' + (state.scanning ? ' disabled' : '') + '>' + (state.scanning ? 'Searching the network' : 'Search the network') + '</button></div>' +
       '<label class="field" style="margin:12px 0 0"><span>Or connect by IP address</span><div class="row"><input class="input num" id="lsIp" placeholder="192.168.1.50" inputmode="decimal" style="flex:1"><button class="btn" id="lsIpGo">Connect</button></div></label>' +
       '<p class="hint">Two ways to reach a light: join its own WiFi hotspot (named K7_ and some letters) in your phone\'s WiFi settings, as with the official app, or put the light on your home WiFi once with "Put a light on WiFi". Search works for both.</p>' +
@@ -1173,7 +1205,8 @@
   function start() {
     if (transport.kind === 'demo') $('demoBanner').hidden = false;
     const cur = store.get('current');
-    const l = lights().find((x) => x.id === cur);
+    const l = lights().find((x) => x.id === cur && x.name);
+    if (!l) forgetUnconfirmed();
     if (l) {
       loadWorking(l);
       state.light = l;

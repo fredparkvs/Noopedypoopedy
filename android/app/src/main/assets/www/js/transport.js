@@ -52,8 +52,12 @@
       this.kind = 'demo';
       this.onData = null;
       this.onClose = null;
-      // window.__demoHotspot simulates a phone joined to a light's own hotspot
+      // window.__demoHotspot simulates a phone joined to a light's own hotspot;
+      // window.__demoVpn a phone whose VPN swallows local traffic, with a VPN
+      // address that accepts connections but never answers
       this.hotspot = !!root.__demoHotspot;
+      this.vpn = !!root.__demoVpn;
+      this.blackholes = this.vpn ? { '10.2.0.1': true } : {};
       this.lights = this.hotspot
         ? { '192.168.4.1': new root.NooMockLight({ name: 'K7_AP000001' }) }
         : {
@@ -66,13 +70,15 @@
       this.closedAt = {};
       // The Mini answers slowly, in two pieces with a long gap between them.
       this.slow = { '192.168.1.51': 260 };
+      if (this.vpn) this.lights = {};
       this.connected = null;
       this.silent = false;
     }
     connect(host) {
       this.close();
       return new Promise((resolve, reject) => setTimeout(() => {
-        if (!this.lights[host]) return reject(new Error('No light answered at ' + host));
+        if (this.blackholes[host]) { this.connected = host; this.silent = true; return resolve(true); }
+        if (!this.lights[host]) return reject(new Error('No answer from ' + host + '. Is the light on and on this WiFi?'));
         this.silent = Date.now() - (this.closedAt[host] || 0) < this.busyMs;
         this.connected = host;
         resolve(true);
@@ -99,13 +105,15 @@
       // a port scan opens and closes a connection to every light
       return new Promise((r) => setTimeout(() => {
         Object.keys(this.lights).forEach((h) => { this.closedAt[h] = Date.now(); });
-        r(Object.keys(this.lights));
+        r(Object.keys(this.lights).concat(Object.keys(this.blackholes)));
       }, 600));
     }
     netInfo() {
-      return Promise.resolve(this.hotspot
+      const n = this.hotspot
         ? { ip: '192.168.4.2', prefix: 24, gateway: '192.168.4.1', dhcpServer: '192.168.4.1', wifi: true }
-        : { ip: '192.168.1.20', prefix: 24, gateway: '192.168.1.1', dhcpServer: '192.168.1.1', wifi: true });
+        : { ip: '192.168.1.20', prefix: 24, gateway: '192.168.1.1', dhcpServer: '192.168.1.1', wifi: true };
+      n.vpn = this.vpn;
+      return Promise.resolve(n);
     }
     wifiInfo() { return Promise.resolve({ ssid: 'HomeWiFi', bssid: '00:11:22:33:44:55', frequency: 2437 }); }
     provision() { return new Promise((r) => setTimeout(() => r([{ ip: '192.168.1.52', bssid: 'aa:bb:cc:dd:ee:ff' }]), 1500)); }
@@ -256,7 +264,7 @@
 
     /* Connect to a host just long enough to learn its name. */
     async probe(host, timeoutMs) {
-      await this.connect(host, timeoutMs);
+      try { await this.connect(host, timeoutMs); } catch (e) { e.stage = 'connect'; throw e; }
       try { return await this.readStatus({ tries: 2, reconnect: false }); } finally { this.close(); }
     }
   }

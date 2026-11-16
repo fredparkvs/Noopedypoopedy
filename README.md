@@ -21,7 +21,7 @@ written up in [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
 ## Install
 
-1. Download `ReefLight-1.0.2.apk` to your phone (from the chat, or from the
+1. Download `ReefLight-1.0.3.apk` to your phone (from the chat, or from the
    **Actions** tab of this repository: open the latest run and download the
    `ReefLight-apk` artifact).
 2. Open it. Android will ask you to allow installs from that source (your
@@ -82,10 +82,14 @@ Red. The K7 Mini has White, Blue, UV. You can rename them.
 
 ## Troubleshooting
 
-* **Light not found:** make sure the official app is fully closed, and that the
-  phone is on 2.4 GHz WiFi with the light (or on the light's hotspot). Then tap
-  **Search the network**. You can also type the light's IP address (your
-  router's device list shows it).
+* **"A VPN is switched on":** Android sends the app's traffic into the VPN, so
+  it never reaches the light. Turn the VPN off while you adjust the light, or
+  in the VPN app exclude Reef Light (split tunnelling) or allow LAN
+  connections. ProtonVPN, for example, has both options.
+* **Light not found:** make sure the official app is force-stopped, and that
+  the phone is joined to the light's `K7_...` hotspot (or the light is on your
+  home WiFi). Then tap **Search the network**. Devices that accept a
+  connection but do not answer like a light are never offered as lights.
 * **"Refused the connection":** another phone or the official app is connected
   to the light.
 * **Status block not readable** (Lights & backup tab, Diagnostics): the app
