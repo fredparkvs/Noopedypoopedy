@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.ReefLight" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/sea_900</item>
+        <item name="android:statusBarColor">@color/sea_900</item>
+        <item name="android:navigationBarColor">@color/sea_800</item>
+        <item name="android:colorAccent">@color/coral</item>
+    </style>
+</resources>

@@ -1,0 +1,16 @@
+# Android / Gradle
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+*.iml
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
+
+# Built APKs (CI uploads them as artifacts)
+*.apk
