@@ -11,8 +11,8 @@ android {
         applicationId = "dev.reeflight.k7"
         minSdk = 26
         targetSdk = 34
-        versionCode = 4
-        versionName = "1.0.3"
+        versionCode = 5
+        versionName = "1.1.0"
     }
 
     // One fixed key so every build (local or CI) can update the installed app
@@ -48,6 +48,7 @@ android {
 dependencies {
     implementation("androidx.activity:activity-ktx:1.9.3")
     implementation("androidx.webkit:webkit:1.11.0")
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
     implementation("com.github.EspressifApp:lib-esptouch-android:1.1.1")
     testImplementation("junit:junit:4.13.2")
 }

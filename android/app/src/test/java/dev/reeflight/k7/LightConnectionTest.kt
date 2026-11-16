@@ -22,6 +22,7 @@ class FakeLight {
     val port get() = server.localPort
     val received = LinkedBlockingQueue<ByteArray>()
     @Volatile var dropAfterNextFrame = false
+    @Volatile var ignoreSave = false
 
     val status: ByteArray = ByteArray(221).also {
         it[0] = 0xAB.toByte(); it[1] = 0xAA.toByte(); it[10] = 0x18; it[203] = 1
@@ -46,6 +47,11 @@ class FakeLight {
                                 frame.reset()
                                 received.add(f)
                                 if (dropAfterNextFrame) { sock.close(); break }
+                                if (f.size == 208 && f[3] == 0x07.toByte() && !ignoreSave) {
+                                    // like the real light: the saved day shows up in the next status block
+                                    System.arraycopy(f, 4, status, 4, 6); status[10] = f[10]
+                                    System.arraycopy(f, 11, status, 11, 192); status[203] = f[203]
+                                }
                                 if (f.size == 5 && f[3] == 0x08.toByte()) {
                                     out.write(status, 0, 100); out.flush()
                                     Thread.sleep(30)

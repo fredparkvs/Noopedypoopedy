@@ -44,6 +44,10 @@
     saveText(filename, text) { return call('saveText', filename, text); }
     openText() { return call('openText'); }
     copyText(text) { return call('copyText', text); }
+    setDailyPlan(json) { return call('setDailyPlan', json); }
+    clearDailyPlan() { return call('clearDailyPlan'); }
+    dailyStatus() { return call('dailyStatus'); }
+    markApplied(date) { return call('markApplied', date); }
   }
 
   // ---- demo transport --------------------------------------------------------
@@ -135,6 +139,11 @@
       });
     }
     copyText(text) { return navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject(new Error('No clipboard')); }
+    // the daily background job only exists in the Android app; keep the plan for tests
+    setDailyPlan(json) { this.plan = JSON.parse(json); return Promise.resolve(true); }
+    clearDailyPlan() { this.plan = null; return Promise.resolve(true); }
+    dailyStatus() { return Promise.resolve({}); }
+    markApplied(date) { if (this.plan) this.plan.applied = date; return Promise.resolve(true); }
   }
 
   // ---- link -------------------------------------------------------------------

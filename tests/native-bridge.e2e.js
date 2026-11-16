@@ -55,7 +55,11 @@ const url = 'file://' + path.join(ROOT, 'android/app/src/main/assets/www/index.h
       cancelProvision() {},
       saveText(id, filename, text) { window.__saved = { filename, text }; ok(id, true); },
       openText(id) { ok(id, window.__saved ? window.__saved.text : ''); },
-      copyText(id, text) { window.__copied = text; ok(id, true); }
+      copyText(id, text) { window.__copied = text; ok(id, true); },
+      setDailyPlan(id, json) { window.__plan = JSON.parse(json); ok(id, true); },
+      clearDailyPlan(id) { window.__plan = null; ok(id, true); },
+      dailyStatus(id) { ok(id, { hasPlan: !!window.__plan, lastResult: null }); },
+      markApplied(id, date) { ok(id, true); }
     };
     window.__dropLight = () => { connectedHost = null; emit({ type: 'closed', reason: 'connection lost' }); };
     window.__light = () => light;

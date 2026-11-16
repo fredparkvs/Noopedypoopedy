@@ -4,7 +4,7 @@
   "description": "Tests for the Reef Light app (Noo-Psyche K7 controller)",
   "scripts": {
     "test": "node --test tests/*.test.js",
-    "test:e2e": "node tests/ui.e2e.js && node tests/hotspot.e2e.js && node tests/vpn.e2e.js && node tests/native-bridge.e2e.js"
+    "test:e2e": "node tests/ui.e2e.js && node tests/hotspot.e2e.js && node tests/vpn.e2e.js && node tests/natural.e2e.js && node tests/native-bridge.e2e.js"
   },
   "devDependencies": {
     "playwright": "1.48.2"

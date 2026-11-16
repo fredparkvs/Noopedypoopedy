@@ -138,11 +138,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause() {
         super.onPause()
+        inForeground = false
         web.onPause() // the page sees visibilitychange and frees the light after a while
     }
 
     override fun onResume() {
         super.onResume()
+        inForeground = true
         web.onResume()
     }
 
@@ -156,6 +158,9 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
+        /** The background job leaves the light alone while the app is open (the app holds its one connection). */
+        @Volatile
+        var inForeground = false
         private const val APP_HOST = "appassets.androidplatform.net"
         private val START_URL = Uri.parse("https://$APP_HOST/assets/www/index.html").toString()
     }

@@ -21,7 +21,7 @@ written up in [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
 ## Install
 
-1. Download `ReefLight-1.0.3.apk` to your phone (from the chat, or from the
+1. Download `ReefLight-1.1.0.apk` to your phone (from the chat, or from the
    **Actions** tab of this repository: open the latest run and download the
    `ReefLight-apk` artifact).
 2. Open it. Android will ask you to allow installs from that source (your
@@ -69,6 +69,16 @@ on the phone until you tap **Save to light**.
 * One rule comes from the light itself: it stores one point per clock hour, so
   you cannot put two points in the same hour (the app tells you if you try).
 
+**Natural cycle** (Schedule tab). Runs the light on a real reef's sunrise,
+sunset, seasons and moon, recalculated every day, following the coral
+spawning research of the Horniman Museum's Project Coral (Craggs et al. 2017)
+and the moonrise studies after it. Pick a reef (Singapore, the Great Barrier
+Reef or Palau, or any latitude and longitude), set when midday should fall on
+your tank, and the app does the rest, including the dark gap between sunset
+and moonrise on the nights after a full moon that triggers spawning. A
+calendar shows the next five weeks of nights. Details, references and limits:
+[docs/NATURAL_CYCLE.md](docs/NATURAL_CYCLE.md).
+
 **Manual tab.** Moving any slider switches the light to manual and applies
 instantly. **Run schedule** switches back. **Save to light** also stores your
 manual mix on the light, so it survives a power cut.
@@ -114,11 +124,14 @@ android/                     Android project (Kotlin shell + WebView UI)
   app/src/main/assets/www/   the app UI: plain HTML, CSS and JavaScript
     js/protocol.js           frames, parser, stream reassembly
     js/schedule.js           key points <-> 24 device slots, presets
+    js/astro.js              sun and moon positions, phase (checked against PyEphem)
+    js/natural.js            natural cycle: daily curve and best 24-point fit
     js/transport.js          native bridge, demo light, connection handling
     js/app.js                screens
   app/src/main/java/...      LightConnection (TCP), NetScanner, LightBridge, MainActivity
   app/src/test/...           socket tests against a fake light
 docs/PROTOCOL.md             the decoded protocol
+docs/NATURAL_CYCLE.md        the natural cycle model and its research
 tests/                       Node and Playwright tests
 ```
 

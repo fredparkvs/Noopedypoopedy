@@ -33,28 +33,13 @@ class LightBridge(private val activity: MainActivity, private val web: WebView) 
     private val conn = LightConnection(
         onData = { bytes -> event(JSONObject().put("type", "data").put("hex", toHex(bytes))) },
         onClosed = { reason -> event(JSONObject().put("type", "closed").put("reason", reason)) },
-        newSocket = { wifiSocket() },
+        newSocket = { WifiNet.socket(activity) },
     )
 
     private val cm get() = activity.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-
-    /**
-     * The real WiFi network (the light's hotspot or your home WiFi). A VPN
-     * also reports the WiFi transport of the network under it, so it has to
-     * be excluded explicitly; mobile data is never where the light is.
-     */
-    private fun wifiNetwork(): android.net.Network? = cm.allNetworks.firstOrNull { n ->
-        val c = cm.getNetworkCapabilities(n) ?: return@firstOrNull false
-        c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) && !c.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-    }
-
-    private fun vpnActive(): Boolean = cm.allNetworks.any {
-        cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
-    }
-
-    /** A socket that goes out over WiFi, not through a VPN or mobile data. */
-    private fun wifiSocket(): java.net.Socket =
-        try { wifiNetwork()?.socketFactory?.createSocket() } catch (_: Exception) { null } ?: java.net.Socket()
+    private fun wifiNetwork() = WifiNet.network(activity)
+    private fun vpnActive() = WifiNet.vpnActive(activity)
+    private fun wifiSocket() = WifiNet.socket(activity)
 
     @Volatile
     private var espTask: IEsptouchTask? = null
@@ -92,13 +77,7 @@ class LightBridge(private val activity: MainActivity, private val web: WebView) 
      * On the light's own hotspot the light is the DHCP server; this is the
      * address the official app connects to in "AP connection" mode.
      */
-    private fun dhcpServer(): String? = try {
-        @Suppress("DEPRECATION")
-        val a = (activity.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager).dhcpInfo?.serverAddress ?: 0
-        if (a == 0) null else "${a and 255}.${(a shr 8) and 255}.${(a shr 16) and 255}.${(a shr 24) and 255}"
-    } catch (_: Exception) {
-        null
-    }
+    private fun dhcpServer(): String? = WifiNet.dhcpServer(activity)
 
     private fun currentNet(): Net = netFromLinks().copy(dhcpServer = dhcpServer())
 
@@ -182,6 +161,28 @@ class LightBridge(private val activity: MainActivity, private val web: WebView) 
     @JavascriptInterface
     fun cancelProvision() {
         espTask?.interrupt()
+    }
+
+    // ---- natural cycle: days prepared for the background job ------------------
+
+    @JavascriptInterface
+    fun setDailyPlan(id: Int, json: String) = work.execute {
+        try { DailyPlan.save(activity.applicationContext, json); resolve(id, "true") } catch (e: Exception) { reject(id, e.message ?: "Could not store the plan") }
+    }
+
+    @JavascriptInterface
+    fun clearDailyPlan(id: Int) = work.execute {
+        DailyPlan.clear(activity.applicationContext); resolve(id, "true")
+    }
+
+    @JavascriptInterface
+    fun dailyStatus(id: Int) = work.execute {
+        resolve(id, DailyPlan.status(activity.applicationContext).toString())
+    }
+
+    @JavascriptInterface
+    fun markApplied(id: Int, date: String) = work.execute {
+        DailyPlan.markApplied(activity.applicationContext, date); resolve(id, "true")
     }
 
     // ---- files and clipboard -------------------------------------------------

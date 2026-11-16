@@ -3,7 +3,7 @@
   const P = window.NooProtocol;
   const S = window.NooSchedule;
   const { createTransport, LightLink } = window.NooTransport;
-  const VERSION = '1.0.3';
+  const VERSION = '1.1.0';
 
   // ---- storage ------------------------------------------------------------
   const store = {
@@ -151,6 +151,8 @@
     state.readFailed = !st;
     if (st) applyStatus(st, force); else renderAll();
     await link.sendAck(P.syncTimeFromDate(new Date()));
+    const n = natural();
+    if (st && n && n.enabled && n.lastApplied !== NN.ymd(today())) await applyNatural({ silent: true });
   }
 
   function applyStatus(st, force) {
@@ -393,17 +395,8 @@
     btn.disabled = true;
     btn.textContent = 'Saving';
     try {
-      const slots = S.toSlots(state.points);
-      await link.sendAck(P.setAll({ manual: state.manual, slots, auto: state.auto, time: new Date() }), 4000);
-      let verified = false;
-      try {
-        const st = await link.readStatus();
-        state.lastStatus = st;
-        verified = st.scheduleValid && S.slotsEqual(st.slots, slots);
-      } catch (e) { /* unverified */ }
-      state.savedFp = fp();
-      state.source = 'light';
-      persistWorking();
+      const verified = await writeSlots(S.toSlots(state.points), state.auto);
+      if (naturalOn()) pushPlan();
       toast(verified ? 'Saved. The light confirmed the new settings.' : 'Sent to the light.');
     } catch (e) {
       toast('Save failed: ' + e.message);
@@ -411,6 +404,250 @@
       btn.disabled = false;
       renderSaveBar();
     }
+  }
+
+  /* Send a full day (and the manual mix) to the light, then read it back. Returns true if confirmed. */
+  async function writeSlots(slots, auto) {
+    await link.sendAck(P.setAll({ manual: state.manual, slots, auto, time: new Date() }), 4000);
+    let verified = false;
+    try {
+      const st = await link.readStatus();
+      state.lastStatus = st;
+      verified = st.scheduleValid && S.slotsEqual(st.slots, slots);
+    } catch (e) { /* unverified */ }
+    state.savedFp = fp();
+    state.source = 'light';
+    persistWorking();
+    return verified;
+  }
+
+  // ---- natural cycle ---------------------------------------------------------------------------
+  const NN = window.NooNatural;
+  const PLAN_DAYS = 60;
+
+  function natural() { return state.light ? store.get('natural:' + state.light.id, null) : null; }
+  function saveNatural(n) { if (state.light) store.set('natural:' + state.light.id, n); }
+  function naturalOn() { const n = natural(); return !!(n && n.enabled); }
+  function today() { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
+
+  /* Peak mix to start from: the brightest value of each channel in the current schedule. */
+  function currentMix() {
+    const n = channels().length;
+    const mix = [0, 1, 2, 3, 4, 5].map((c) => (c < n ? Math.round(Math.max.apply(null, state.points.map((p) => p.v[c]))) : 0));
+    return mix.some((x) => x > 0) ? mix : [40, 90, 20, 60, 80, 10].map((v, c) => (c < n ? v : 0));
+  }
+
+  /* Work out today's light, show it, and send it to the light when connected. */
+  async function applyNatural(opts) {
+    opts = opts || {};
+    const n = natural();
+    if (!n || !n.enabled) return false;
+    const day = NN.computeDay(n.settings, today());
+    state.points = S.fromSlots(day.slots);
+    state.auto = true;
+    persistWorking();
+    renderAll();
+    pushPlan();
+    if (!connected()) {
+      if (!opts.silent) toast('Today\'s light is ready. It will be sent when the light is connected.');
+      return false;
+    }
+    try {
+      const verified = await writeSlots(day.slots, true);
+      n.lastApplied = NN.ymd(today());
+      saveNatural(n);
+      if (transport.markApplied) transport.markApplied(n.lastApplied).catch(() => {});
+      if (!opts.quiet) toast(verified ? 'Today\'s natural light is on the light (confirmed).' : 'Today\'s natural light was sent to the light.');
+      renderAll();
+      return true;
+    } catch (e) {
+      toast('Could not send today\'s light: ' + e.message);
+      return false;
+    }
+  }
+
+  /*
+   * The next 60 days, ready to send, for the Android background job: it runs
+   * every hour and sends the day's light once, whenever the light is reachable.
+   */
+  let planTimer = null;
+  let planGen = 0; // a newer request (or turning off) makes an unfinished calculation stale
+  function pushPlan() {
+    if (!transport.setDailyPlan || !state.light) return;
+    clearTimeout(planTimer);
+    const gen = ++planGen;
+    planTimer = setTimeout(async () => {
+      const n = natural();
+      if (!n || !n.enabled) { transport.clearDailyPlan().catch(() => {}); return; }
+      const frames = {};
+      const start = today();
+      for (let i = 0; i < PLAN_DAYS; i++) {
+        const date = NN.addDays(start, i);
+        const slots = NN.computeDay(n.settings, date).slots;
+        frames[NN.ymd(date)] = P.toHex(P.setAll({ manual: state.manual, slots, auto: true, time: new Date(2000, 0, 1, 0, 0, 0) }));
+        if (i % 5 === 4) await new Promise((r) => setTimeout(r, 0)); // keep the screen responsive
+        if (gen !== planGen) return;
+      }
+      if (gen !== planGen || !naturalOn()) return;
+      const plan = { light: state.light.name || state.light.host, host: state.light.host, applied: n.lastApplied || null, frames };
+      transport.setDailyPlan(JSON.stringify(plan)).catch(() => {});
+    }, 300);
+  }
+
+  function hm(min) {
+    if (min == null) return '-';
+    const h = Math.floor(min / 60), m = Math.round(min % 60);
+    return h ? h + ' h ' + m + ' min' : m + ' min';
+  }
+
+  function nightSummary(nt, settings) {
+    if (settings && !settings.moon.some((m) => Math.round(m * nt.fraction) > 0)) return 'Moon too thin to show, dark all night';
+    if (nt.upAtSunset) return 'Moon already up at sunset (' + Math.round(nt.fraction * 100) + '%)';
+    if (nt.darkGap != null) return 'Dark for ' + hm(nt.darkGap) + ' after sunset, then the moon rises';
+    return 'No moonrise tonight';
+  }
+
+  function naturalCard() {
+    const n = natural();
+    const s = n.settings;
+    const reef = NN.reefById(s.reefId);
+    const nt = NN.night(s, today());
+    const sentToday = n.lastApplied === NN.ymd(today());
+    const after = nt.nightsAfterFull;
+    const moonOn = s.moon.some((x) => x > 0);
+    let html = '<div class="card"><div class="row spread"><h2 style="margin:0">Natural cycle</h2>' +
+      '<span class="hint">' + esc(reef ? reef.name : 'Custom location') + '</span></div>' +
+      (s.seasonShiftMonths ? '<p class="hint" style="margin:4px 0 0">Reef year shifted by ' + (s.seasonShiftMonths > 0 ? '+' : '') + s.seasonShiftMonths + ' months.</p>' : '') +
+      '<ul class="list" style="margin-top:6px">' +
+      '<li><span class="sub-t">Sunrise, sunset</span><span class="num">' + NN.fmt(nt.sunrise) + ', ' + NN.fmt(nt.sunset) + '</span></li>' +
+      '<li><span class="sub-t">Midday brightness</span><span class="num">' + Math.round(nt.season * 100) + '% of your mix</span></li>' +
+      '<li><span class="sub-t">Moon</span><span>' + esc(nt.phase) + ', ' + Math.round(nt.fraction * 100) + '%</span></li>' +
+      '<li><span class="sub-t">Tonight</span><span style="text-align:right">' + (moonOn ? esc(nightSummary(nt, s)) : 'Moonlight is off') + '</span></li>' +
+      (after != null && after <= 10 ? '<li><span class="sub-t">Lunar night</span><span>Night ' + after + ' after the full moon</span></li>' : '') +
+      '</ul>' +
+      '<p style="margin:8px 0;color:' + (sentToday ? 'var(--ok)' : 'var(--warn)') + '">' +
+      (sentToday ? 'Today\'s light is on the light.' : 'Today\'s light has not been sent yet.') + '</p>' +
+      '<p class="hint" id="autoStatus" style="margin:0 0 10px"></p>' +
+      '<div class="btn-row">' + (sentToday ? '' : '<button class="btn primary small" data-action="natural-send">Send today\'s light</button>') +
+      '<button class="btn small" data-action="natural-calendar">Calendar</button><button class="btn small" data-action="natural-setup">Settings</button>' +
+      '<button class="btn small quiet" data-action="natural-off">Turn off</button></div></div>';
+    return html;
+  }
+
+  async function refreshAutoStatus() {
+    const el = $('autoStatus');
+    if (!el) return;
+    if (!transport.dailyStatus) { el.textContent = ''; return; }
+    let st = null;
+    try { st = await transport.dailyStatus(); } catch (e) { st = null; }
+    const hotspot = state.light && viaHotspot(state.light.host);
+    let text = transport.kind === 'demo' ? 'Automatic daily updates run in the Android app.'
+      : 'Automatic daily updates: the phone sends each day\'s light once, whenever it can reach the light.';
+    if (st && st.lastResult) text += ' Last: ' + st.lastResult;
+    if (hotspot) text += ' Your light is on its own hotspot, so it is only reachable while your phone is joined to it. For hands-off daily updates, put the light on your home WiFi.';
+    el.textContent = text;
+  }
+
+  function naturalInvite() {
+    return '<div class="card"><h2>Natural cycle</h2><p class="sub">Follow a real reef\'s sunrise, sunset, seasons and moon, worked out fresh every day. ' +
+      'Modelled on the ex situ coral spawning work of Craggs and colleagues (Horniman Museum, 2017), including the dark gap after sunset on the nights after a full moon.</p>' +
+      '<div class="btn-row"><button class="btn" data-action="natural-setup">Set up natural cycle</button></div></div>';
+  }
+
+  function openNaturalSetup() {
+    const existing = natural();
+    const s = existing ? JSON.parse(JSON.stringify(existing.settings)) : NN.defaults(currentMix(), state.model);
+    const n = channels().length;
+    const reefOpts = NN.REEFS.map((r) => '<label style="display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-top:1px solid var(--sea-700)">' +
+      '<input type="radio" name="nsReef" value="' + r.id + '"' + (s.reefId === r.id ? ' checked' : '') + ' style="margin-top:4px">' +
+      '<span><span class="main-t">' + esc(r.name) + '</span><br><span class="hint">' + esc(r.spawning) + ' (' + esc(r.source) + ')</span></span></label>').join('') +
+      '<label style="display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--sea-700)"><input type="radio" name="nsReef" value="custom"' + (s.reefId === 'custom' ? ' checked' : '') + '>' +
+      '<span class="main-t">Another place</span></label>' +
+      '<div class="row" id="nsCustom" style="gap:8px;margin-bottom:8px"' + (s.reefId === 'custom' ? '' : ' hidden') + '>' +
+      '<label class="field" style="flex:1;margin:0"><span>Latitude</span><input class="input num" id="nsLat" inputmode="decimal" value="' + s.lat + '"></label>' +
+      '<label class="field" style="flex:1;margin:0"><span>Longitude</span><input class="input num" id="nsLon" inputmode="decimal" value="' + s.lon + '"></label></div>';
+    const months = [];
+    for (let m = -6; m <= 6; m++) months.push('<option value="' + m + '"' + (s.seasonShiftMonths === m ? ' selected' : '') + '>' + (m === 0 ? 'No shift' : (m > 0 ? '+' : '') + m + ' months') + '</option>');
+    const ramps = [60, 120, 180, 240].map((r) => '<option value="' + r + '"' + (s.rampMin === r ? ' selected' : '') + '>' + r / 60 + (r === 60 ? ' hour' : ' hours') + (r === 180 ? ' (study)' : '') + '</option>').join('');
+    const mins = [60, 70, 80, 90, 100].map((v) => '<option value="' + v + '"' + (s.seasonMinPct === v ? ' selected' : '') + '>' + (v === 100 ? 'No change' : v + '%' + (v === 60 ? ' (study)' : '')) + '</option>').join('');
+    openSheet(existing && existing.enabled ? 'Natural cycle settings' : 'Set up natural cycle',
+      '<h2 style="font-size:var(--fs-md);margin:0 0 4px">Reef</h2>' + reefOpts +
+      '<div class="row" style="gap:12px;margin-top:8px">' +
+      '<label class="field" style="flex:1"><span>Midday on your tank</span><input class="input" type="time" id="nsMidday" value="' + S.fmtTime(s.middayAt) + '"></label>' +
+      '<label class="field" style="flex:1"><span>Shift the reef\'s year</span><select class="input" id="nsShift">' + months.join('') + '</select></label></div>' +
+      '<div class="row" style="gap:12px">' +
+      '<label class="field" style="flex:1"><span>Sunrise and sunset ramps</span><select class="input" id="nsRamp">' + ramps + '</select></label>' +
+      '<label class="field" style="flex:1"><span>Dimmest season</span><select class="input" id="nsMin">' + mins + '</select></label></div>' +
+      '<h2 style="font-size:var(--fs-md);margin:6px 0 2px">Your mix at the brightest time of year</h2>' + sliderRows('nsMix', s.mix) +
+      '<h2 style="font-size:var(--fs-md);margin:14px 0 2px">Full moon</h2>' +
+      '<p class="hint" style="margin:0 0 4px">The moon dims with its phase and is off when too thin. The light\'s dimmest step, 1%, is far brighter than real moonlight (about 1 lux), so keep it low; the timing is what matters for spawning.</p>' +
+      sliderRows('nsMoon', s.moon) +
+      '<p class="hint" id="nsPreview" style="margin:10px 0"></p><p class="err" id="nsErr"></p>' +
+      '<div class="btn-row"><button class="btn quiet" data-close>Cancel</button><button class="btn primary" id="nsGo">' + (existing && existing.enabled ? 'Save settings' : 'Start natural cycle') + '</button></div>',
+      (body) => {
+        const read = () => {
+          const reefId = body.querySelector('input[name="nsReef"]:checked').value;
+          $('nsCustom').hidden = reefId !== 'custom';
+          const reef = NN.reefById(reefId);
+          s.reefId = reefId;
+          s.lat = reef ? reef.lat : parseFloat($('nsLat').value);
+          s.lon = reef ? reef.lon : parseFloat($('nsLon').value);
+          s.middayAt = S.parseTime($('nsMidday').value) == null ? s.middayAt : S.parseTime($('nsMidday').value);
+          s.seasonShiftMonths = +$('nsShift').value;
+          s.rampMin = +$('nsRamp').value;
+          s.seasonMinPct = +$('nsMin').value;
+          if (!(s.lat >= -60 && s.lat <= 60) || !(s.lon >= -180 && s.lon <= 180)) throw new Error('Enter a latitude between -60 and 60 and a longitude between -180 and 180.');
+        };
+        let previewTimer = null;
+        const preview = () => {
+          clearTimeout(previewTimer);
+          previewTimer = setTimeout(() => {
+            try {
+              read();
+              $('nsErr').textContent = '';
+              const nt = NN.night(s, today());
+              $('nsPreview').textContent = 'Today on your tank: sunrise ' + NN.fmt(nt.sunrise) + ', sunset ' + NN.fmt(nt.sunset) +
+                ', midday at ' + Math.round(nt.season * 100) + '% of your mix. ' + nt.phase + ' (' + Math.round(nt.fraction * 100) + '%). ' + nightSummary(nt, s) + '.';
+            } catch (e) { $('nsErr').textContent = e.message; }
+          }, 150);
+        };
+        body.querySelectorAll('input[name="nsReef"]').forEach((r) => r.addEventListener('change', preview));
+        ['nsLat', 'nsLon', 'nsMidday', 'nsShift', 'nsRamp', 'nsMin'].forEach((id) => $(id).addEventListener('change', preview));
+        bindSliders(body, 'nsMix', s.mix, () => {});
+        bindSliders(body, 'nsMoon', s.moon, () => {});
+        for (let c = n; c < 6; c++) { s.mix[c] = 0; s.moon[c] = 0; }
+        $('nsGo').addEventListener('click', async () => {
+          try { read(); } catch (e) { $('nsErr').textContent = e.message; return; }
+          const next = Object.assign({}, existing || {}, { enabled: true, settings: s, lastApplied: null });
+          saveNatural(next);
+          closeSheet();
+          await applyNatural();
+        });
+        preview();
+      });
+  }
+
+  function openNaturalCalendar() {
+    const n = natural();
+    const s = n.settings;
+    const reef = NN.reefById(s.reefId);
+    const rows = [];
+    const start = today();
+    for (let i = 0; i < 35; i++) {
+      const date = NN.addDays(start, i);
+      const nt = NN.night(s, date);
+      const key = nt.fraction > 0.97 || (nt.nightsAfterFull != null && nt.nightsAfterFull <= 7);
+      rows.push('<tr' + (key ? ' style="background:var(--sea-700)"' : '') + '>' +
+        '<td>' + date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }) + '</td>' +
+        '<td class="num">' + NN.fmt(nt.sunset) + '</td>' +
+        '<td class="num">' + Math.round(nt.fraction * 100) + '%</td>' +
+        '<td class="num">' + (nt.upAtSunset ? 'up' : nt.darkGap == null ? '-' : hm(nt.darkGap)) + '</td>' +
+        '<td class="num">' + (nt.nightsAfterFull != null && nt.nightsAfterFull <= 10 ? nt.nightsAfterFull : '') + '</td></tr>');
+    }
+    openSheet('The next five weeks',
+      (reef ? '<p class="hint" style="margin-top:0"><strong>' + esc(reef.name) + ':</strong> ' + esc(reef.spawning) + ' (' + esc(reef.source) + ')</p>' : '') +
+      '<p class="hint">Highlighted: the full moon and the 7 nights after it. "Dark" is how long the tank stays dark between sunset and moonrise; "up" means the moon is already up at sunset. Spawning in the wild follows the first nights with a dark gap. In aquaria it has come later: 6 to 16 nights after the full moon in the Horniman study.</p>' +
+      '<div style="overflow-x:auto"><table class="cal"><thead><tr><th>Night</th><th>Sunset</th><th>Moon</th><th>Dark</th><th>After full</th></tr></thead><tbody>' + rows.join('') + '</tbody></table></div>');
   }
 
   // ---- rendering: shell -------------------------------------------------------------------
@@ -553,6 +790,7 @@
     if (!svg || svg.dataset.bound) return;
     svg.dataset.bound = '1';
     svg.addEventListener('click', (e) => {
+      if (naturalOn()) { toast('The natural cycle sets the schedule each day. Turn it off to edit points by hand.'); return; }
       const r = svg.getBoundingClientRect();
       const x = ((e.clientX - r.left) / r.width) * W;
       const t = Math.max(0, Math.min(1439, ((x - PL) / (W - PL - PR)) * 1440));
@@ -597,11 +835,20 @@
     const conflictHours = S.conflicts(state.points);
     let html = silentBanner() || (!connected() ? vpnNote() : '');
     if (!state.auto && !state.readFailed) html += '<div class="banner"><span><strong>Manual mode.</strong> The light is ignoring this schedule.</span><button class="btn small" data-action="run-schedule">Run schedule</button></div>';
-    html += sourceNote();
+    const nat = naturalOn();
+    if (!nat) html += sourceNote();
+    if (nat) html += naturalCard();
     html += '<div class="card"><div class="row spread"><h2>Today</h2><span class="hint num" id="clock"></span></div>' +
       '<div id="chartBox">' + chartSvg(state.points, null) + '</div>' +
       '<div id="nowBox">' + nowBars(currentOutput()) + '</div>' +
-      '<p class="hint" style="margin:10px 0 0">Tap the chart to add or edit a point.</p></div>';
+      '<p class="hint" style="margin:10px 0 0">' + (nat ? 'Worked out for today by the natural cycle.' : 'Tap the chart to add or edit a point.') + '</p></div>';
+    if (nat) {
+      v.innerHTML = html;
+      tickClock();
+      bindChart();
+      refreshAutoStatus();
+      return;
+    }
     html += '<div class="card"><h2>Key points</h2><p class="sub">The light fades smoothly from one point to the next.</p><ul class="points">' +
       sorted.map((p) => {
         const idx = state.points.indexOf(p);
@@ -616,6 +863,7 @@
       '<button class="btn" data-action="add-point">Add point</button>' +
       '<button class="btn" data-action="quick-setup">Quick setup</button>' +
       '<button class="btn" data-action="presets">Presets</button></div></div>';
+    html += naturalInvite();
     v.innerHTML = html;
     tickClock();
     bindChart();
@@ -1119,6 +1367,7 @@
     const body = $('sheetBody');
     body.innerHTML = html;
     $('sheetWrap').hidden = false;
+    $('sheet').scrollTop = 0; // each sheet starts at its top, not where the last one was left
     sheetOnClose = onClose || null;
     body.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', closeSheet));
     if (onMount) onMount(body);
@@ -1170,6 +1419,18 @@
     else if (act === 'copy-code') copyCode();
     else if (act === 'copy-diag') copyDiagnostics();
     else if (act === 'blink') blink();
+    else if (act === 'natural-setup') openNaturalSetup();
+    else if (act === 'natural-calendar') openNaturalCalendar();
+    else if (act === 'natural-send') ensureConnected().then((ok) => ok && applyNatural());
+    else if (act === 'natural-off') {
+      const n = natural();
+      if (n) { n.enabled = false; saveNatural(n); }
+      planGen++;
+      clearTimeout(planTimer);
+      if (transport.clearDailyPlan) transport.clearDailyPlan().catch(() => {});
+      toast('Natural cycle off. Today\'s points stay on the light until you change them.');
+      renderAll();
+    }
     else if (act === 'paste-code') pasteCode();
     else if (act === 'demo-on') ensureConnected().then((ok) => ok && link.sendAck(P.setDemo(true)).then(() => toast('Demo running on the light.')));
     else if (act === 'demo-off') ensureConnected().then((ok) => ok && link.sendAck(P.setDemo(false)).then(() => toast('Demo stopped.')));
@@ -1196,6 +1457,8 @@
   });
 
   setInterval(() => {
+    const n = natural();
+    if (n && n.enabled && n.lastApplied !== NN.ymd(today()) && connected() && !state.editing) applyNatural({ silent: true });
     tickClock();
     if (state.view === 'schedule' && !state.editing) refreshChart();
     renderGlass();
