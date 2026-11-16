@@ -21,18 +21,37 @@ written up in [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
 ## Install
 
-1. Download `ReefLight-1.0.1.apk` to your phone (from the chat, or from the
+1. Download `ReefLight-1.0.2.apk` to your phone (from the chat, or from the
    **Actions** tab of this repository: open the latest run and download the
    `ReefLight-apk` artifact).
 2. Open it. Android will ask you to allow installs from that source (your
    browser or file manager). Allow it, then tap **Install**.
-3. **Close the official Noo-Psyche app** (swipe it away). The light accepts one
-   connection at a time.
-4. Open **Reef Light**. It searches your WiFi and lists the lights it finds.
-   Tap **Use**.
+3. **Force-stop the official Noo-Psyche app** (Settings, Apps, Noo-Psyche,
+   Force stop). Swiping it away is not enough: it keeps its connection open,
+   and the light talks to one app at a time.
+4. Connect your phone to the light, the same way you do for the official app
+   (see below), then open **Reef Light**.
 
-Your phone must be on the same WiFi as the light, or connected to the light's
-own `K7_...` hotspot.
+### Two ways to reach the light
+
+* **The light's own hotspot** (the official app's "AP connection"): in your
+  phone's WiFi settings, join the network named `K7_` plus some letters and
+  numbers. Reef Light goes straight to the light and connects without you
+  tapping anything. Android may warn that this network has no internet; that
+  is expected, stay connected.
+* **Your home WiFi** (the official app's "LAN connection"): put the light on
+  your home WiFi once with **Put a light on WiFi**. After that the phone stays
+  on your normal WiFi and Reef Light searches the network for the light.
+
+### How to tell it is talking to your actual light
+
+* The name at the top changes from an address (like `192.168.4.1`) to the
+  light's own name (like `K7_1A2B3C4D`). That name comes from the light's
+  reply, and it is the same name as its hotspot.
+* **Lights & backup, This light** shows *Identity: Confirmed* in green once the
+  light has answered, and whether you are connected through its hotspot.
+* **Blink the light** makes the light go dark twice and then puts it back
+  exactly as it was.
 
 ## Using it
 

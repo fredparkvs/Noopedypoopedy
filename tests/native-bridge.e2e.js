@@ -74,8 +74,8 @@ const url = 'file://' + path.join(ROOT, 'android/app/src/main/assets/www/index.h
   await page.goto(url);
   assert.equal(await page.locator('#demoBanner').isHidden(), true, 'native transport is used, no demo banner');
 
-  await page.getByText('K7_BRIDGE01').waitFor();
-  await page.locator('li', { hasText: 'K7_BRIDGE01' }).getByRole('button', { name: 'Use' }).click();
+  // the only light on the network: the app connects without a tap
+  await page.locator('#lightName', { hasText: 'K7_BRIDGE01' }).waitFor();
   await page.locator('#statusText', { hasText: 'Running schedule' }).waitFor();
 
   // edit, save, verify on the fake light

@@ -65,9 +65,23 @@ class LightBridge(private val activity: MainActivity, private val web: WebView) 
 
     // ---- network -----------------------------------------------------------
 
-    private data class Net(val ip: String?, val prefix: Int, val gateway: String?, val wifi: Boolean)
+    private data class Net(val ip: String?, val prefix: Int, val gateway: String?, val wifi: Boolean, val dhcpServer: String? = null)
 
-    private fun currentNet(): Net {
+    /**
+     * On the light's own hotspot the light is the DHCP server; this is the
+     * address the official app connects to in "AP connection" mode.
+     */
+    private fun dhcpServer(): String? = try {
+        @Suppress("DEPRECATION")
+        val a = (activity.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager).dhcpInfo?.serverAddress ?: 0
+        if (a == 0) null else "${a and 255}.${(a shr 8) and 255}.${(a shr 16) and 255}.${(a shr 24) and 255}"
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun currentNet(): Net = netFromLinks().copy(dhcpServer = dhcpServer())
+
+    private fun netFromLinks(): Net {
         val cm = activity.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         // prefer the WiFi network: the light is never on mobile data
         val network = cm.allNetworks.firstOrNull {
@@ -83,7 +97,8 @@ class LightBridge(private val activity: MainActivity, private val web: WebView) 
     @JavascriptInterface
     fun netInfo(id: Int) = work.execute {
         val n = currentNet()
-        resolve(id, JSONObject().put("ip", n.ip).put("prefix", n.prefix).put("gateway", n.gateway).put("wifi", n.wifi).toString())
+        resolve(id, JSONObject().put("ip", n.ip).put("prefix", n.prefix).put("gateway", n.gateway)
+            .put("dhcpServer", n.dhcpServer).put("wifi", n.wifi).toString())
     }
 
     @JavascriptInterface
@@ -92,7 +107,7 @@ class LightBridge(private val activity: MainActivity, private val web: WebView) 
             val n = currentNet()
             if (n.ip == null) return@execute reject(id, "This phone is not on a WiFi network.")
             // the light's own hotspot hands out addresses with the light as gateway
-            val extras = listOfNotNull(n.gateway, "192.168.4.1")
+            val extras = listOfNotNull(n.dhcpServer, n.gateway, "192.168.4.1")
             val hosts = NetScanner.candidates(n.ip, n.prefix, extras)
             resolve(id, JSONArray(NetScanner.scan(hosts, port, timeoutMs)).toString())
         } catch (e: Exception) {

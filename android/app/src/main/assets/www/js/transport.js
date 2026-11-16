@@ -33,7 +33,7 @@
       if (e.type === 'data' && this.onData) this.onData(P.fromHex(e.hex));
       if (e.type === 'closed' && this.onClose) this.onClose(e.reason || 'closed');
     }
-    connect(host, port) { return call('connect', host, port, 5000); }
+    connect(host, port, timeoutMs) { return call('connect', host, port, timeoutMs || 5000); }
     send(bytes) { return call('send', P.toHex(bytes)); }
     close() { try { root.NooNative.close(); } catch (e) { /* ignore */ } }
     scan(port) { return call('scan', port, 600); }
@@ -52,10 +52,14 @@
       this.kind = 'demo';
       this.onData = null;
       this.onClose = null;
-      this.lights = {
-        '192.168.1.50': new root.NooMockLight({ name: 'K7_DEMO0001' }),
-        '192.168.1.51': new root.NooMockLight({ name: 'K7M_DEMO002', manual: [40, 60, 20, 0, 0, 0] })
-      };
+      // window.__demoHotspot simulates a phone joined to a light's own hotspot
+      this.hotspot = !!root.__demoHotspot;
+      this.lights = this.hotspot
+        ? { '192.168.4.1': new root.NooMockLight({ name: 'K7_AP000001' }) }
+        : {
+          '192.168.1.50': new root.NooMockLight({ name: 'K7_DEMO0001' }),
+          '192.168.1.51': new root.NooMockLight({ name: 'K7M_DEMO002', manual: [40, 60, 20, 0, 0, 0] })
+        };
       // Like the real ESP8266: it serves one client, and a connection that
       // arrives too soon after the last one closed is accepted but ignored.
       this.busyMs = 900;
@@ -98,7 +102,11 @@
         r(Object.keys(this.lights));
       }, 600));
     }
-    netInfo() { return Promise.resolve({ ip: '192.168.1.20', gateway: '192.168.1.1', wifi: true }); }
+    netInfo() {
+      return Promise.resolve(this.hotspot
+        ? { ip: '192.168.4.2', prefix: 24, gateway: '192.168.4.1', dhcpServer: '192.168.4.1', wifi: true }
+        : { ip: '192.168.1.20', prefix: 24, gateway: '192.168.1.1', dhcpServer: '192.168.1.1', wifi: true });
+    }
     wifiInfo() { return Promise.resolve({ ssid: 'HomeWiFi', bssid: '00:11:22:33:44:55', frequency: 2437 }); }
     provision() { return new Promise((r) => setTimeout(() => r([{ ip: '192.168.1.52', bssid: 'aa:bb:cc:dd:ee:ff' }]), 1500)); }
     cancelProvision() {}
@@ -171,7 +179,7 @@
     /* Note that something (e.g. a port scan) just opened and closed a connection to these hosts. */
     touched(hosts) { hosts.forEach((h) => { this.lastClose[h] = Date.now(); }); }
 
-    async connect(host) {
+    async connect(host, timeoutMs) {
       if (this.state === 'connected' || this.state === 'connecting') {
         if (this.host) this.lastClose[this.host] = Date.now();
       }
@@ -185,7 +193,7 @@
       const wait = SETTLE_MS - (Date.now() - (this.lastClose[host] || 0));
       if (wait > 0) await new Promise((r) => setTimeout(r, wait));
       try {
-        await this.t.connect(host, P.PORT);
+        await this.t.connect(host, P.PORT, timeoutMs);
         this._log('sys', 'connected to ' + host);
         this._setState('connected');
       } catch (e) {
@@ -247,8 +255,8 @@
     }
 
     /* Connect to a host just long enough to learn its name. */
-    async probe(host) {
-      await this.connect(host);
+    async probe(host, timeoutMs) {
+      await this.connect(host, timeoutMs);
       try { return await this.readStatus({ tries: 2, reconnect: false }); } finally { this.close(); }
     }
   }
