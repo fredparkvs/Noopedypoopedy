@@ -21,7 +21,7 @@ written up in [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
 ## Install
 
-1. Download `ReefLight-1.0.0.apk` to your phone (from the chat, or from the
+1. Download `ReefLight-1.0.1.apk` to your phone (from the chat, or from the
    **Actions** tab of this repository: open the latest run and download the
    `ReefLight-apk` artifact).
 2. Open it. Android will ask you to allow installs from that source (your

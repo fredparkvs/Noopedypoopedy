@@ -3,7 +3,7 @@
   const P = window.NooProtocol;
   const S = window.NooSchedule;
   const { createTransport, LightLink } = window.NooTransport;
-  const VERSION = '1.0.0';
+  const VERSION = '1.0.1';
 
   // ---- storage ------------------------------------------------------------
   const store = {
@@ -143,9 +143,10 @@
     let st = null;
     state.reading = true;
     renderHeader();
-    try { st = await link.readStatus(); } catch (e) { toast('Connected, but the light did not send its settings.'); }
+    try { st = await link.readStatus(); } catch (e) { /* shown as a banner */ }
     state.reading = false;
-    if (st) applyStatus(st, force); else renderHeader();
+    state.readFailed = !st;
+    if (st) applyStatus(st, force); else renderAll();
     await link.sendAck(P.syncTimeFromDate(new Date()));
   }
 
@@ -208,6 +209,7 @@
     const wasHost = connected() ? link.host : null;
     try {
       const hosts = await transport.scan(P.PORT);
+      link.touched(hosts.filter((h) => h !== wasHost)); // the scan itself just connected to each of them
       for (const host of hosts) {
         if (state.scanAbort) break;
         if (host === wasHost && state.light) {
@@ -325,9 +327,11 @@
     $('lightName').textContent = displayName(state.light);
     let s = state.light ? link.state : 'idle';
     if (s === 'connected' && state.reading) s = 'connecting';
+    const silent = s === 'connected' && state.readFailed;
     const el = $('status');
-    el.dataset.state = s;
+    el.dataset.state = silent ? 'offline' : s;
     $('statusText').textContent = !state.light ? 'Find light'
+      : silent ? 'Not answering'
       : s === 'connected' ? (state.auto ? 'Running schedule' : 'Manual')
       : s === 'connecting' ? 'Connecting'
       : s === 'offline' ? 'Offline, tap to retry' : 'Not connected';
@@ -468,8 +472,17 @@
   }
 
   // ---- schedule view ------------------------------------------------------------------------------
+  function silentBanner() {
+    if (!state.readFailed || !connected()) return '';
+    return '<div class="banner" style="display:block;border-color:#7a3b3b">' +
+      '<p style="margin:0 0 8px;color:var(--ink)"><strong>The light accepted the connection but did not answer.</strong></p>' +
+      '<p style="margin:0 0 8px">This usually means another app or phone is still connected to it, since the light only talks to one at a time. ' +
+      'Force-stop the official app (Settings, Apps, Noo-Psyche, Force stop) and close it on any other phone. If that does not help, switch the light off for 10 seconds.</p>' +
+      '<div class="btn-row"><button class="btn small" data-action="reload">Try again</button><button class="btn small" data-action="copy-diag">Copy details</button></div></div>';
+  }
+
   function sourceNote() {
-    if (!state.light) return '';
+    if (!state.light || (state.readFailed && connected())) return '';
     if (state.source === 'light') return '';
     if (state.source === 'phone') return '<div class="banner"><span>Showing the copy saved on this phone. It will be replaced by what is on the light once it connects, unless you have unsaved changes.</span></div>';
     if (state.source === 'factory') return '<div class="banner"><span>Showing the factory LPS schedule until the light sends its own.</span></div>';
@@ -487,8 +500,8 @@
     const sorted = state.points.slice().sort((a, b) => a.t - b.t);
     const ch = channels();
     const conflictHours = S.conflicts(state.points);
-    let html = '';
-    if (!state.auto) html += '<div class="banner"><span><strong>Manual mode.</strong> The light is ignoring this schedule.</span><button class="btn small" data-action="run-schedule">Run schedule</button></div>';
+    let html = silentBanner();
+    if (!state.auto && !state.readFailed) html += '<div class="banner"><span><strong>Manual mode.</strong> The light is ignoring this schedule.</span><button class="btn small" data-action="run-schedule">Run schedule</button></div>';
     html += sourceNote();
     html += '<div class="card"><div class="row spread"><h2>Today</h2><span class="hint num" id="clock"></span></div>' +
       '<div id="chartBox">' + chartSvg(state.points, null) + '</div>' +
@@ -781,7 +794,8 @@
       '<div class="btn-row"><button class="btn" data-action="demo-on">Run the light\'s day demo</button><button class="btn" data-action="demo-off">Stop demo</button></div>' +
       '<p class="hint">Last status from the light' + (st ? ' (' + st.length + ' bytes, schedule ' + (st.scheduleValid ? 'read OK' : 'not readable') + ')' : '') + ':</p>' +
       '<pre class="log">' + esc(st ? st.hex.replace(/(.{32})/g, '$1\n') : 'nothing yet') + '</pre>' +
-      '<p class="hint">Traffic</p><pre class="log" id="log"></pre></div>' +
+      '<p class="hint">Traffic</p><pre class="log" id="log"></pre>' +
+      '<div class="btn-row" style="margin-top:10px"><button class="btn" data-action="copy-diag">Copy details</button></div></div>' +
 
       '<div class="card"><h2>About</h2><p class="hint" style="margin:0">Reef Light ' + VERSION + '. An independent app for Noo-Psyche K7 lights. It talks to the light directly over your WiFi (TCP port 8266), needs no account and sends nothing to the internet.</p></div>';
 
@@ -946,6 +960,25 @@
     });
   }
 
+  function diagnosticsText() {
+    const st = state.lastStatus;
+    return [
+      'Reef Light ' + VERSION + ' (' + transport.kind + ')',
+      'Light: ' + (state.light ? (state.light.name || '?') + ' at ' + state.light.host : 'none'),
+      'Link: ' + link.state + (state.readFailed ? ', settings not received' : ''),
+      'Last status: ' + (st ? st.length + ' bytes, schedule ' + (st.scheduleValid ? 'OK' : 'unreadable') + '\n' + st.hex : 'none'),
+      'Traffic:',
+      link.log.slice(-80).map((x) => x.at + ' ' + x.dir + ' ' + x.text).join('\n')
+    ].join('\n');
+  }
+
+  function copyDiagnostics() {
+    const text = diagnosticsText();
+    transport.copyText(text).then(() => toast('Details copied. Paste them into the chat.'), () => {
+      openSheet('Details', '<textarea class="input" readonly style="min-height:240px">' + esc(text) + '</textarea>');
+    });
+  }
+
   function pasteCode() {
     openSheet('Paste official-app code',
       '<p class="hint" style="margin-top:0">The official app exports a QR code. Scan it with any QR reader and paste the text here.</p>' +
@@ -1004,7 +1037,12 @@
     if (!a) return;
     const act = a.dataset.action;
     if (act === 'lights') openLightsSheet();
-    else if (act === 'status') { if (!state.light) openLightsSheet(); else if (!connected()) { state.retries = 0; connectTo(state.light, { rescan: true }); } else openLightsSheet(); }
+    else if (act === 'status') {
+      if (!state.light) openLightsSheet();
+      else if (!connected()) { state.retries = 0; connectTo(state.light, { rescan: true }); }
+      else if (state.readFailed) connectTo(state.light, { force: true, rescan: false });
+      else openLightsSheet();
+    }
     else if (act === 'save') saveToLight();
     else if (act === 'run-schedule') setMode(true);
     else if (act === 'add-point') addPoint(null);
@@ -1017,6 +1055,7 @@
     else if (act === 'export') exportBackup();
     else if (act === 'import') importBackup();
     else if (act === 'copy-code') copyCode();
+    else if (act === 'copy-diag') copyDiagnostics();
     else if (act === 'paste-code') pasteCode();
     else if (act === 'demo-on') ensureConnected().then((ok) => ok && link.sendAck(P.setDemo(true)).then(() => toast('Demo running on the light.')));
     else if (act === 'demo-off') ensureConnected().then((ok) => ok && link.sendAck(P.setDemo(false)).then(() => toast('Demo stopped.')));

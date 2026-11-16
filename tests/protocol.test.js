@@ -88,6 +88,41 @@ test('framer reassembles a status block split across TCP reads', async () => {
   assert.equal(got[1].name, 'K7_SPLIT01');
 });
 
+test('framer waits for a status block that arrives slowly', async () => {
+  const got = [];
+  const f = new P.Framer((m) => got.push(m), 20, 1000);
+  const bytes = buildStatus({ manual: [5, 5, 5, 5, 5, 5], slots: S.factorySlots('k7', 'SPS'), auto: true, name: 'K7_SLOW0001' });
+  f.feed(bytes.slice(0, 90));
+  await new Promise((r) => setTimeout(r, 80)); // much longer than the idle time
+  f.feed(bytes.slice(90, 150));
+  await new Promise((r) => setTimeout(r, 80));
+  f.feed(bytes.slice(150));
+  await new Promise((r) => setTimeout(r, 60));
+  assert.deepEqual(got.map((m) => m.type), ['status']);
+  assert.equal(got[0].name, 'K7_SLOW0001');
+});
+
+test('framer gives up on an incomplete block after the max wait', async () => {
+  const got = [];
+  const f = new P.Framer((m) => got.push(m), 10, 60);
+  f.feed([0xab, 0xaa, 0x10, 0x08, 1, 2, 3]);
+  await new Promise((r) => setTimeout(r, 150));
+  assert.deepEqual(got.map((m) => m.type), ['unknown']);
+});
+
+test('framer skips stray bytes and splits glued replies', async () => {
+  const got = [];
+  const f = new P.Framer((m) => got.push(m), 20);
+  const a = buildStatus({ manual: [1, 1, 1, 1, 1, 1], slots: S.factorySlots('k7', 'LPS'), auto: true, name: 'K7_FIRST001' });
+  const b = buildStatus({ manual: [2, 2, 2, 2, 2, 2], slots: S.factorySlots('k7', 'LPS'), auto: false, name: 'K7_SECOND01' });
+  f.feed([0x0d, 0x0a].concat(a, P.fromHex('abaaa5a1'), b));
+  await new Promise((r) => setTimeout(r, 60));
+  assert.deepEqual(got.map((m) => m.type), ['unknown', 'status', 'ack', 'status']);
+  assert.equal(got[1].name, 'K7_FIRST001');
+  assert.equal(got[3].name, 'K7_SECOND01');
+  assert.equal(got[3].auto, false);
+});
+
 test('official export code round-trips', () => {
   const slots = S.factorySlots('k7', 'Soft coral');
   const code = P.toOfficialCode([50, 50, 50, 50, 50, 50], slots);

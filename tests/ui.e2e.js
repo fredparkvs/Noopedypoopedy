@@ -154,6 +154,30 @@ function serve() {
   assert.equal(await page.locator('#peTime').textContent(), '14:00');
   await page.locator('#peDone').click();
 
+  // the slow K7 Mini (reply split with a long pause) still connects and reads
+  await page.locator('[data-action="lights"]').first().click();
+  await page.locator('#lsScan').click();
+  await page.locator('li', { hasText: 'K7M_DEMO002' }).getByRole('button', { name: 'Use' }).click();
+  await page.locator('#lightName', { hasText: 'K7M_DEMO002' }).waitFor();
+  await page.locator('#statusText', { hasText: 'Running schedule' }).waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('.now-out .col').count(), 3, 'Mini shows 3 channels');
+
+  // a light that never answers: clear explanation, retry, and copyable details
+  await page.evaluate(() => { window.__nooApp.link.t.busyMs = 1e9; });
+  await page.locator('[data-action="lights"]').first().click();
+  await page.locator('li', { hasText: 'K7_DEMO0001' }).getByRole('button', { name: /Use|Reconnect/ }).click();
+  await page.getByText('accepted the connection but did not answer').waitFor({ timeout: 20000 });
+  assert.equal(await page.locator('#statusText').textContent(), 'Not answering');
+  await shot('7-not-answering');
+  const log = await page.evaluate(() => window.__nooApp.link.log.map((l) => l.text).join('\n'));
+  assert.match(log, /attempt 4 of 4/);
+  assert.match(log, /reconnecting/);
+  // once the light is free again, Try again recovers
+  await page.evaluate(() => { window.__nooApp.link.t.busyMs = 900; });
+  await page.getByRole('button', { name: 'Try again' }).click();
+  await page.locator('#statusText', { hasText: 'Running schedule' }).waitFor({ timeout: 10000 });
+  assert.equal(await page.getByText('accepted the connection but did not answer').count(), 0);
+
   assert.deepEqual(errors, [], 'no page errors');
   await browser.close();
   srv.close();

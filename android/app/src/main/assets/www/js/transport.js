@@ -56,28 +56,48 @@
         '192.168.1.50': new root.NooMockLight({ name: 'K7_DEMO0001' }),
         '192.168.1.51': new root.NooMockLight({ name: 'K7M_DEMO002', manual: [40, 60, 20, 0, 0, 0] })
       };
+      // Like the real ESP8266: it serves one client, and a connection that
+      // arrives too soon after the last one closed is accepted but ignored.
+      this.busyMs = 900;
+      this.closedAt = {};
+      // The Mini answers slowly, in two pieces with a long gap between them.
+      this.slow = { '192.168.1.51': 260 };
       this.connected = null;
+      this.silent = false;
     }
     connect(host) {
+      this.close();
       return new Promise((resolve, reject) => setTimeout(() => {
         if (!this.lights[host]) return reject(new Error('No light answered at ' + host));
+        this.silent = Date.now() - (this.closedAt[host] || 0) < this.busyMs;
         this.connected = host;
         resolve(true);
-      }, 250));
+      }, 60));
     }
     send(bytes) {
       if (!this.connected) return Promise.reject(new Error('Not connected'));
+      if (this.silent) return Promise.resolve(true);
       const reply = this.lights[this.connected].handle(bytes);
       if (reply) {
         // deliver in two pieces to exercise reassembly, like real TCP can
         const cut = Math.min(reply.length, 4 + Math.floor(Math.random() * 120));
+        const gap = this.slow[this.connected] || 30;
         setTimeout(() => this.onData && this.onData(reply.slice(0, cut)), 30);
-        if (cut < reply.length) setTimeout(() => this.onData && this.onData(reply.slice(cut)), 60);
+        if (cut < reply.length) setTimeout(() => this.onData && this.onData(reply.slice(cut)), 30 + gap);
       }
       return Promise.resolve(true);
     }
-    close() { this.connected = null; }
-    scan() { return new Promise((r) => setTimeout(() => r(Object.keys(this.lights)), 600)); }
+    close() {
+      if (this.connected) this.closedAt[this.connected] = Date.now();
+      this.connected = null;
+    }
+    scan() {
+      // a port scan opens and closes a connection to every light
+      return new Promise((r) => setTimeout(() => {
+        Object.keys(this.lights).forEach((h) => { this.closedAt[h] = Date.now(); });
+        r(Object.keys(this.lights));
+      }, 600));
+    }
     netInfo() { return Promise.resolve({ ip: '192.168.1.20', gateway: '192.168.1.1', wifi: true }); }
     wifiInfo() { return Promise.resolve({ ssid: 'HomeWiFi', bssid: '00:11:22:33:44:55', frequency: 2437 }); }
     provision() { return new Promise((r) => setTimeout(() => r([{ ip: '192.168.1.52', bssid: 'aa:bb:cc:dd:ee:ff' }]), 1500)); }
@@ -114,6 +134,7 @@
       this.t.onData = (bytes) => { this._log('in', P.toHex(bytes)); this.framer.feed(bytes); };
       this.t.onClose = (reason) => this._closed(reason);
       this.log = [];
+      this.lastClose = {};
     }
     on(name, fn) { (this.handlers[name] = this.handlers[name] || []).push(fn); }
     _emit(name, data) { (this.handlers[name] || []).forEach((fn) => fn(data)); }
@@ -141,16 +162,28 @@
     }
 
     _closed(reason) {
+      if (this.host) this.lastClose[this.host] = Date.now();
       this.framer.reset();
       this._log('sys', 'connection closed: ' + reason);
       if (this.state !== 'idle') this._setState('offline');
     }
 
+    /* Note that something (e.g. a port scan) just opened and closed a connection to these hosts. */
+    touched(hosts) { hosts.forEach((h) => { this.lastClose[h] = Date.now(); }); }
+
     async connect(host) {
-      if (this.host !== host || this.state !== 'connected') this.t.close();
+      if (this.state === 'connected' || this.state === 'connecting') {
+        if (this.host) this.lastClose[this.host] = Date.now();
+      }
+      this.t.close();
       this.host = host;
       this._setState('connecting');
       this.framer.reset();
+      // The light serves one client and needs a moment to free its slot after
+      // a disconnect; a connection made sooner is accepted but never answered.
+      // The official app waits a second before every connection for this.
+      const wait = SETTLE_MS - (Date.now() - (this.lastClose[host] || 0));
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
       try {
         await this.t.connect(host, P.PORT);
         this._log('sys', 'connected to ' + host);
@@ -162,7 +195,12 @@
       }
     }
 
-    close() { this._setState('idle'); this.t.close(); this.framer.reset(); }
+    close() {
+      if (this.host && (this.state === 'connected' || this.state === 'connecting')) this.lastClose[this.host] = Date.now();
+      this._setState('idle');
+      this.t.close();
+      this.framer.reset();
+    }
 
     send(bytes, opts) {
       opts = opts || {};
@@ -180,7 +218,29 @@
       return job;
     }
 
-    readStatus() { return this.send(P.readAll(), { expect: (m) => m.type === 'status', timeout: 4000 }); }
+    /*
+     * Ask for the status block. Like the official app, ask again when the
+     * answer does not come; if the light stays silent, reconnect once and
+     * try again, since a silent light usually means a stuck connection.
+     */
+    async readStatus(opts) {
+      opts = opts || {};
+      const tries = opts.tries || 4;
+      let lastErr = null;
+      for (let i = 0; i < tries; i++) {
+        try {
+          return await this.send(P.readAll(), { expect: (m) => m.type === 'status', timeout: 3000 });
+        } catch (e) {
+          lastErr = e;
+          this._log('sys', 'no settings from the light (attempt ' + (i + 1) + ' of ' + tries + ')');
+          if (opts.reconnect !== false && i === 1 && this.host) {
+            this._log('sys', 'reconnecting to ' + this.host);
+            try { await this.connect(this.host); } catch (ce) { throw ce; }
+          }
+        }
+      }
+      throw lastErr;
+    }
 
     sendAck(bytes, timeout) {
       return this.send(bytes, { expect: (m) => m.type === 'ack', timeout: timeout || 2500 }).catch(() => null);
@@ -189,9 +249,11 @@
     /* Connect to a host just long enough to learn its name. */
     async probe(host) {
       await this.connect(host);
-      try { return await this.readStatus(); } finally { this.close(); }
+      try { return await this.readStatus({ tries: 2, reconnect: false }); } finally { this.close(); }
     }
   }
+
+  const SETTLE_MS = 1200;
 
   function createTransport() {
     return root.NooNative ? new NativeTransport() : new DemoTransport();

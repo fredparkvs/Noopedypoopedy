@@ -174,36 +174,73 @@
    * flaky). Feed every chunk in; acks are split off immediately, anything else
    * is emitted once the line has been quiet for `idleMs`.
    */
-  function Framer(onMessage, idleMs) {
+  function isAckAt(b, i) { return b[i] === 0xAB && b[i + 1] === 0xAA && b[i + 2] === 0xA5 && b[i + 3] === 0xA1; }
+  function isHeadAt(b, i) { return b[i] === 0xAB && b[i + 1] === 0xAA; }
+  function nextHead(b, from) {
+    for (var i = from; i + 1 < b.length; i++) if (isHeadAt(b, i)) return i;
+    return -1;
+  }
+
+  /*
+   * Status data bytes are all 0x00-0x7F (percentages, times, ASCII), so AB AA
+   * only ever appears at the start of a reply. That lets the framer skip stray
+   * bytes and split replies that arrive glued together.
+   */
+  function Framer(onMessage, idleMs, maxWaitMs) {
     this.buf = [];
     this.onMessage = onMessage;
     this.idleMs = idleMs == null ? 150 : idleMs;
+    this.maxWaitMs = maxWaitMs == null ? 2500 : maxWaitMs;
     this.timer = null;
+    this.firstAt = 0;
   }
 
   Framer.prototype.feed = function (bytes) {
+    if (!this.buf.length) this.firstAt = Date.now();
     this.buf = this.buf.concat(Array.prototype.slice.call(bytes));
-    this._drainAcks();
+    this._drain();
     var self = this;
     if (this.timer) clearTimeout(this.timer);
     if (this.buf.length) this.timer = setTimeout(function () { self.flush(); }, this.idleMs);
   };
 
-  Framer.prototype._drainAcks = function () {
-    while (this.buf.length >= 4 && this.buf[0] === 0xAB && this.buf[1] === 0xAA &&
-           this.buf[2] === 0xA5 && this.buf[3] === 0xA1) {
-      this.buf = this.buf.slice(4);
-      this.onMessage({ type: 'ack', hex: ACK_HEX });
+  /* Emit every reply that is known to be complete. */
+  Framer.prototype._drain = function () {
+    for (;;) {
+      var b = this.buf;
+      if (!b.length) return;
+      if (b.length >= 4 && isAckAt(b, 0)) { this._emit(4); continue; }
+      var head = nextHead(b, 0);
+      if (head > 0) { this._emit(head); continue; } // stray bytes before a reply
+      if (head === 0) {
+        // another reply follows this one (only split where it cannot be inside a status block)
+        var next = nextHead(b, 2);
+        while (next > 0 && next < STATUS_MIN_LEN && !isAckAt(b, next)) next = nextHead(b, next + 2);
+        if (next > 0) { this._emit(next); continue; }
+      }
+      return;
     }
+  };
+
+  Framer.prototype._emit = function (n) {
+    var bytes = this.buf.slice(0, n);
+    this.buf = this.buf.slice(n);
+    this.firstAt = Date.now();
+    this.onMessage(parseMessage(bytes));
   };
 
   Framer.prototype.flush = function () {
     if (this.timer) { clearTimeout(this.timer); this.timer = null; }
-    this._drainAcks();
-    if (!this.buf.length) return;
-    var bytes = this.buf;
-    this.buf = [];
-    this.onMessage(parseMessage(bytes));
+    this._drain();
+    var b = this.buf;
+    if (!b.length) return;
+    // a status block that is still arriving slowly: keep waiting a while
+    if (isHeadAt(b, 0) && !isAckAt(b, 0) && b.length < STATUS_MIN_LEN && Date.now() - this.firstAt < this.maxWaitMs) {
+      var self = this;
+      this.timer = setTimeout(function () { self.flush(); }, this.idleMs);
+      return;
+    }
+    this._emit(b.length);
   };
 
   Framer.prototype.reset = function () {
