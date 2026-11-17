@@ -35,10 +35,19 @@ written up in [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
 ### On a Mac
 
-1. Download the zip for your Mac: `ReefLight-1.1.0-mac-arm64.zip` for Apple
-   silicon (M1, M2, M3, M4; Apple menu, About This Mac, "Chip"), or
-   `ReefLight-1.1.0-mac-x64.zip` for an Intel Mac.
-2. Double-click the zip and drag **Reef Light** into **Applications**.
+1. Download the Mac build made on a real Mac: open the latest run under the
+   repository's **Actions** tab and download the **ReefLight-mac** artifact.
+   It holds `ReefLight-mac-arm64.zip` for Apple silicon (M1, M2, M3, M4; Apple
+   menu, About This Mac, "Chip") and `ReefLight-mac-x64.zip` for an Intel Mac.
+2. Double-click the zip for your Mac and drag **Reef Light** into
+   **Applications**. If Archive Utility reports an error (newer macOS versions
+   have trouble with some zips), unpack it in Terminal instead; this puts the
+   app straight into Applications:
+
+   ```
+   ditto -x -k ~/Downloads/ReefLight-mac-arm64.zip /Applications
+   ```
+
 3. The app is not signed with a paid Apple developer certificate, so macOS
    blocks it at first. Open **Terminal** and paste this once; it tells your Mac
    to trust this copy of the app:
