@@ -19,16 +19,30 @@
   root.__noo.reject = (id, msg) => { const p = pending.get(id); if (p) { pending.delete(id); p.reject(new Error(msg)); } };
   root.__noo.event = (json) => { const e = JSON.parse(json); listeners.forEach((l) => l(e)); };
 
+  // Android delivers results later through window.__noo.resolve; the Mac app's
+  // bridge returns a promise of the same JSON instead. Both end up here.
   function call(method, ...args) {
     return new Promise((resolve, reject) => {
       const id = nextId++;
       pending.set(id, { resolve, reject });
-      try { root.NooNative[method](id, ...args); } catch (e) { pending.delete(id); reject(e); }
+      try {
+        const r = root.NooNative[method](id, ...args);
+        if (r && typeof r.then === 'function') {
+          r.then((json) => root.__noo.resolve(id, json), (e) => root.__noo.reject(id, (e && e.message) || String(e)));
+        }
+      } catch (e) { pending.delete(id); reject(e); }
     });
   }
 
   class NativeTransport {
-    constructor() { this.kind = 'native'; this.onData = null; this.onClose = null; listeners.add((e) => this._event(e)); }
+    constructor() {
+      this.kind = 'native';
+      this.platform = root.NooNative.platform || 'android';
+      this.onData = null;
+      this.onClose = null;
+      listeners.add((e) => this._event(e));
+      if (root.NooNative.onEvent) root.NooNative.onEvent((json) => root.__noo.event(json));
+    }
     _event(e) {
       if (e.type === 'data' && this.onData) this.onData(P.fromHex(e.hex));
       if (e.type === 'closed' && this.onClose) this.onClose(e.reason || 'closed');

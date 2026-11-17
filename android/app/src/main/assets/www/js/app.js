@@ -38,6 +38,8 @@
 
   // ---- state ------------------------------------------------------------------
   const transport = createTransport();
+  const MAC = transport.platform === 'mac';
+  const DEVICE = MAC ? 'Mac' : 'phone'; // what this app runs on, for the texts
   const link = new LightLink(transport);
   const state = {
     view: 'schedule',
@@ -542,9 +544,10 @@
     try { st = await transport.dailyStatus(); } catch (e) { st = null; }
     const hotspot = state.light && viaHotspot(state.light.host);
     let text = transport.kind === 'demo' ? 'Automatic daily updates run in the Android app.'
-      : 'Automatic daily updates: the phone sends each day\'s light once, whenever it can reach the light.';
+      : MAC ? 'Automatic daily updates: this Mac sends each day\'s light once, whenever it can reach the light. Reef Light keeps running in the menu bar when you close the window; turn on Open at login there to keep it going after a restart.'
+        : 'Automatic daily updates: the phone sends each day\'s light once, whenever it can reach the light.';
     if (st && st.lastResult) text += ' Last: ' + st.lastResult;
-    if (hotspot) text += ' Your light is on its own hotspot, so it is only reachable while your phone is joined to it. For hands-off daily updates, put the light on your home WiFi.';
+    if (hotspot) text += ' Your light is on its own hotspot, so it is only reachable while your ' + DEVICE + ' is joined to it. For hands-off daily updates, put the light on your home WiFi.';
     el.textContent = text;
   }
 
@@ -817,7 +820,7 @@
   function sourceNote() {
     if (!state.light || (state.readFailed && connected())) return '';
     if (state.source === 'light') return '';
-    if (state.source === 'phone') return '<div class="banner"><span>Showing the copy saved on this phone. It will be replaced by what is on the light once it connects, unless you have unsaved changes.</span></div>';
+    if (state.source === 'phone') return '<div class="banner"><span>Showing the copy saved on this ' + DEVICE + '. It will be replaced by what is on the light once it connects, unless you have unsaved changes.</span></div>';
     if (state.source === 'factory') return '<div class="banner"><span>Showing the factory LPS schedule until the light sends its own.</span></div>';
     return '';
   }
@@ -825,7 +828,7 @@
   function renderSchedule() {
     const v = $('view-schedule');
     if (!state.light) {
-      v.innerHTML = vpnNote() + '<div class="card"><h2>Find your light</h2><p class="sub">Connect your phone to the light\'s own WiFi hotspot (named K7_ and some letters) in your phone\'s WiFi settings, as you do for the official app. If the light is on your home WiFi instead, stay on that.</p>' +
+      v.innerHTML = vpnNote() + '<div class="card"><h2>Find your light</h2><p class="sub">Connect your ' + DEVICE + ' to the light\'s own WiFi hotspot (named K7_ and some letters) in your ' + DEVICE + '\'s WiFi settings, as you do for the official app. If the light is on your home WiFi instead, stay on that.</p>' +
         '<div class="btn-row"><button class="btn primary" data-action="lights">Find my light</button></div></div>' +
         '<div class="card"><h2>Preview</h2>' + '<div id="chartBox">' + chartSvg(state.points) + '</div></div>';
       return;
@@ -1027,7 +1030,7 @@
           store.set('library', lib);
           closeSheet();
           openPresets();
-          toast('Saved "' + name + '" on this phone.');
+          toast('Saved "' + name + '" on this ' + DEVICE + '.');
         });
       },
       () => { persistWorking(); renderAll(); });
@@ -1103,7 +1106,7 @@
       mine.push({ name, v: state.manual.slice() });
       store.set('scenes', mine);
       renderManual();
-      toast('Scene "' + name + '" saved on this phone.');
+      toast('Scene "' + name + '" saved on this ' + DEVICE + '.');
     });
     const clr = $('sceneClear');
     if (clr) clr.addEventListener('click', () => { store.set('scenes', []); renderManual(); });
@@ -1191,13 +1194,13 @@
     if (!state.scanning && state.scanPromise && !state.found.some((f) => f.name)) {
       html += '<p class="err" style="margin-top:12px">No light answered.' +
         (state.silentHosts.length ? ' (' + state.silentHosts.length + ' other device' + (state.silentHosts.length > 1 ? 's' : '') + ' on this network did not answer like a light.)' : '') + '</p>' +
-        '<p class="hint">Check that your phone is joined to the light\'s own WiFi (named K7_ and some letters), that the official app is force-stopped, and that no VPN is on.</p>';
+        '<p class="hint">Check that your ' + DEVICE + ' is joined to the light\'s own WiFi (named K7_ and some letters), that the official app is force-stopped, and that no VPN is on.</p>';
     } else if (state.found.some((f) => f.name) && !extra.length && !state.scanning) {
       html += '<p class="hint">No other lights found.</p>';
     }
     html += '<div class="btn-row" style="margin-top:14px"><button class="btn primary" id="lsScan"' + (state.scanning ? ' disabled' : '') + '>' + (state.scanning ? 'Searching the network' : 'Search the network') + '</button></div>' +
       '<label class="field" style="margin:12px 0 0"><span>Or connect by IP address</span><div class="row"><input class="input num" id="lsIp" placeholder="192.168.1.50" inputmode="decimal" style="flex:1"><button class="btn" id="lsIpGo">Connect</button></div></label>' +
-      '<p class="hint">Two ways to reach a light: join its own WiFi hotspot (named K7_ and some letters) in your phone\'s WiFi settings, as with the official app, or put the light on your home WiFi once with "Put a light on WiFi". Search works for both.</p>' +
+      '<p class="hint">Two ways to reach a light: join its own WiFi hotspot (named K7_ and some letters) in your ' + DEVICE + '\'s WiFi settings, as with the official app, or put the light on your home WiFi once with "Put a light on WiFi". Search works for both.</p>' +
       '<div class="btn-row"><button class="btn" id="lsWifi">Put a light on WiFi</button></div>';
     return html;
   }

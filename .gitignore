@@ -14,3 +14,8 @@ node_modules/
 
 # Built APKs (CI uploads them as artifacts)
 *.apk
+
+# Mac app build
+desktop/node_modules/
+desktop/www/
+desktop/dist/

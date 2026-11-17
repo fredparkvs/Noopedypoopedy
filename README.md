@@ -1,8 +1,9 @@
 # Reef Light
 
-A simpler Android app for **Noo-Psyche K7** reef lights (K7 Pro, K7, K7 Mini).
-It replaces the official "Noo-Psyche" app and talks to the light directly over
-your WiFi. No account, no cloud, nothing sent to the internet.
+A simpler app for **Noo-Psyche K7** reef lights (K7 Pro, K7, K7 Mini), for
+**Android** and the **Mac**. It replaces the official "Noo-Psyche" app and
+talks to the light directly over your WiFi. No account, no cloud, nothing sent
+to the internet.
 
 Built by decoding the official app (`noo_release_203.apk`). The protocol is
 written up in [docs/PROTOCOL.md](docs/PROTOCOL.md).
@@ -31,6 +32,34 @@ written up in [docs/PROTOCOL.md](docs/PROTOCOL.md).
    and the light talks to one app at a time.
 4. Connect your phone to the light, the same way you do for the official app
    (see below), then open **Reef Light**.
+
+### On a Mac
+
+1. Download the zip for your Mac: `ReefLight-1.1.0-mac-arm64.zip` for Apple
+   silicon (M1, M2, M3, M4; Apple menu, About This Mac, "Chip"), or
+   `ReefLight-1.1.0-mac-x64.zip` for an Intel Mac.
+2. Double-click the zip and drag **Reef Light** into **Applications**.
+3. The app is not signed with a paid Apple developer certificate, so macOS
+   blocks it at first. Open **Terminal** and paste this once; it tells your Mac
+   to trust this copy of the app:
+
+   ```
+   xattr -cr "/Applications/Reef Light.app" && codesign --force --deep --sign - "/Applications/Reef Light.app"
+   ```
+
+4. Open **Reef Light** from Applications. Force-stop the official app on your
+   phone first if it is open (the light talks to one app at a time).
+
+The Mac app has the same screens as the Android app. Differences:
+
+* It keeps running in the **menu bar** when you close the window, so the
+  natural cycle's daily updates continue. Its menu has **Open at login** and
+  **Quit Reef Light**.
+* **Put a light on WiFi** needs the Android app (it uses the phone's WiFi radio
+  to send the light your WiFi details). Everything else works on the Mac.
+* For the Mac to reach the light, the Mac must be on the light's hotspot or the
+  light must be on the same WiFi as the Mac. A Mac that stays on your home WiFi
+  works best with the light on your home WiFi too.
 
 ### Two ways to reach the light
 
@@ -130,6 +159,10 @@ android/                     Android project (Kotlin shell + WebView UI)
     js/app.js                screens
   app/src/main/java/...      LightConnection (TCP), NetScanner, LightBridge, MainActivity
   app/src/test/...           socket tests against a fake light
+desktop/                     Mac app (Electron) using the same interface
+  core.js                    TCP connection, network search, daily updates (plain Node)
+  main.js, preload.js        window, menu bar, bridge to the interface
+  scripts/build-mac.sh       builds the Apple silicon and Intel apps
 docs/PROTOCOL.md             the decoded protocol
 docs/NATURAL_CYCLE.md        the natural cycle model and its research
 tests/                       Node and Playwright tests
@@ -142,6 +175,8 @@ the app against a simulated light (demo mode).
 node --test tests/*.test.js
 npm install && npx playwright install chromium && npm run test:e2e
 cd android && ./gradlew testDebugUnitTest assembleDebug
+cd desktop && npm install && npm test && ./scripts/sync-www.sh && xvfb-run -a node test/app.e2e.js
+cd desktop && ./scripts/build-mac.sh
 ```
 
 The APK is signed with `android/app/reeflight-sideload.keystore` so that every

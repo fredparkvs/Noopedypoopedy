@@ -1,4 +1,4 @@
-name: Test and build APK
+name: Test and build (Android and Mac)
 
 on:
   push:
@@ -39,3 +39,37 @@ jobs:
         with:
           name: ReefLight-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Mac app tests (core, and the app itself on a virtual display)
+        working-directory: desktop
+        run: |
+          npm install --no-audit --no-fund
+          npm test
+          ./scripts/sync-www.sh
+          xvfb-run -a node test/app.e2e.js
+
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build and ad-hoc sign the Mac apps
+        working-directory: desktop
+        run: |
+          npm install --no-audit --no-fund
+          npm test
+          ./scripts/build-mac.sh
+          for a in arm64 x64; do
+            codesign --force --deep --sign - "dist/Reef Light-darwin-$a/Reef Light.app"
+            codesign --verify --deep --strict "dist/Reef Light-darwin-$a/Reef Light.app"
+            (cd "dist/Reef Light-darwin-$a" && ditto -c -k --keepParent "Reef Light.app" "../ReefLight-mac-$a.zip")
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ReefLight-mac
+          path: desktop/dist/ReefLight-mac-*.zip
