@@ -211,3 +211,27 @@ pre.log { background: var(--sea-900); border-radius: 8px; padding: 10px; font-si
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* PAR */
+.par-check { margin: 0 0 12px; padding-left: 18px; color: var(--ink-dim); font-size: var(--fs-sm); }
+.par-check li { margin-bottom: 4px; }
+.par-pos { display: grid; grid-template-columns: 84px 1fr 1fr 46px 36px; gap: 6px; align-items: end; padding: 6px 0; border-top: 1px solid var(--sea-700); }
+.par-pos .input { min-width: 0; padding: 8px; }
+.mini-f { display: flex; flex-direction: column; font-size: var(--fs-sm); color: var(--ink-dim); min-width: 0; }
+.mini-f > span { margin-bottom: 2px; white-space: nowrap; }
+.mini-f input[type="radio"] { width: 22px; height: 22px; margin: 11px auto; }
+.par-progress { height: 6px; border-radius: 3px; background: var(--sea-700); overflow: hidden; margin-bottom: 14px; }
+.par-progress span { display: block; height: 100%; background: var(--coral); }
+.par-where { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 10px; background: var(--sea-900); border: 1px solid var(--sea-600); margin-bottom: 12px; }
+.par-where.moved { border-color: var(--warn); }
+.par-where.moved strong { color: var(--warn); }
+.par-what { font-size: var(--fs-xl); font-weight: 650; margin: 0 0 12px; }
+.par-in { font-size: var(--fs-xl); text-align: center; }
+.par-table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); margin-bottom: 6px; }
+.par-table th, .par-table td { text-align: left; padding: 5px 4px; border-top: 1px solid var(--sea-700); }
+.par-table th { color: var(--ink-dim); font-weight: 500; }
+.par-out { padding: 12px; border-radius: 10px; background: var(--sea-900); border: 1px solid var(--sea-600); margin-bottom: 10px; }
+.par-big { font-size: var(--fs-md); margin-bottom: 4px; }
+.par-big .num { font-size: var(--fs-xl); font-weight: 700; color: var(--coral); }
+.par-vals { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.par-vals > span { display: flex; justify-content: space-between; padding: 6px 8px; border-radius: 6px; background: var(--sea-800); border-left: 3px solid var(--c); font-size: var(--fs-sm); }

@@ -1112,6 +1112,302 @@
     if (clr) clr.addEventListener('click', () => { store.set('scenes', []); renderManual(); });
   }
 
+  // ---- PAR: calibration wizard and planner ------------------------------------------------------------------
+  const PAR = window.NooPar;
+  const ownCal = () => store.get('parCal:' + state.model, null);
+  const builtInCal = () => (window.NooParData || {})[state.model] || null;
+  function parCal() { return ownCal() || builtInCal(); }
+  function parRun() { return store.get('parRun:' + state.model, null); }
+  function saveParRun(r) { store.set('parRun:' + state.model, r); }
+  function parChecks() { return store.get('parChecks:' + state.model, []); }
+  const numOr = (v, d) => { const x = parseFloat(String(v).replace(',', '.')); return isNaN(x) ? d : x; };
+
+  function parCard() {
+    const cal = parCal();
+    const run = parRun();
+    const total = run ? PAR.buildSteps(run.model, run.positions).length : 0;
+    const taken = run ? Object.keys(run.readings || {}).length : 0;
+    return '<div class="card"><h2>PAR</h2>' +
+      '<p class="sub">' + (cal
+        ? 'Ask for a PAR at a depth and get settings for it. Calibrated ' + esc(cal.made) + (ownCal() ? ' on this ' + DEVICE + '.' : ', built into the app.')
+        : 'This light type has not been calibrated yet. Calibrating takes a PAR meter and about 40 minutes.') + '</p>' +
+      (cal ? '<div class="btn-row"><button class="btn primary" data-action="par-plan">PAR planner</button></div>' : '') +
+      '<div class="btn-row" style="margin-top:8px"><button class="btn" data-action="par-calibrate">' + (run && taken < total ? 'Continue calibrating (' + taken + ' of ' + total + ')' : 'Calibrate with a PAR meter') + '</button></div>' +
+      '<div class="btn-row" style="margin-top:8px">' +
+      (ownCal() ? '<button class="btn" data-action="par-export">Save calibration file</button>' : '') +
+      '<button class="btn" data-action="par-import">Load calibration file</button></div></div>';
+  }
+
+  // Everything the wizard shows on the light is temporary; put the light back as it was afterwards.
+  let parLive = false;
+  async function parShow(values) {
+    if (!connected()) return false;
+    try {
+      if (!parLive) { parLive = true; await link.send(P.setAutoMode(false)); }
+      await link.send(P.setManual(values));
+      return true;
+    } catch (e) { return false; }
+  }
+  async function parRestore() {
+    if (!parLive) return;
+    parLive = false;
+    if (!connected()) return;
+    if (state.auto) await link.send(P.setAutoMode(true)).catch(() => {});
+    else await link.send(P.setManual(state.manual)).catch(() => {});
+  }
+
+  function posRows(positions) {
+    return positions.map((p, i) => '<div class="row par-pos" data-i="' + i + '">' +
+      '<select class="input" data-f="medium" aria-label="Air or water"><option value="water"' + (p.medium === 'water' ? ' selected' : '') + '>Water</option><option value="air"' + (p.medium === 'air' ? ' selected' : '') + '>Air</option></select>' +
+      '<label class="mini-f"><span>' + (p.medium === 'air' ? 'Below light' : 'Depth') + '</span><input class="input num" data-f="d" inputmode="decimal" value="' + (p.medium === 'air' ? p.dist : p.depth) + '"></label>' +
+      '<label class="mini-f"><span>To the side</span><input class="input num" data-f="offset" inputmode="decimal" value="' + (p.offset || 0) + '"></label>' +
+      '<label class="mini-f" title="Measure the dimming curves here"><span>Curves</span><input type="radio" name="parRef" data-f="ref"' + (p.ref ? ' checked' : '') + '></label>' +
+      '<button class="btn quiet small" data-del="' + i + '" aria-label="Remove this position">&times;</button></div>').join('');
+  }
+
+  function openParSetup() {
+    const run = parRun();
+    const cfg = run ? JSON.parse(JSON.stringify(run)) : { model: state.model, lightHeight: 20, correction: Object.assign({}, PAR.CORRECTION_DEFAULT), positions: PAR.defaultPositions(), readings: {} };
+    cfg.model = state.model;
+    const taken = Object.keys(cfg.readings || {}).length;
+    const nSteps = () => PAR.buildSteps(cfg.model, cfg.positions).length;
+    openSheet('Calibrate PAR',
+      '<p class="sub" style="margin-top:0">The app sets the light for each reading; you hold the meter where it says and type what the meter shows. Your progress is kept if you stop.</p>' +
+      '<ul class="par-check">' +
+      '<li>Dark room: curtains closed, room lights off.</li>' +
+      '<li>Wavemakers and return pump off, so the surface is flat. Turn them back on afterwards.</li>' +
+      '<li>Sensor level and facing up. Measure "to the side" along the light\'s long side.</li>' +
+      '<li>Warm the light up first: all channels at 100% for 10 minutes. Corals can take a few short bright steps, but not 40 minutes at full: shade them or keep the 100% steps quick.</li></ul>' +
+      '<div class="row" style="gap:10px">' +
+      '<label class="field" style="flex:1"><span>Light above water (cm)</span><input class="input num" id="parH" inputmode="decimal" value="' + cfg.lightHeight + '"></label>' +
+      '<label class="field" style="flex:1"><span>Meter: add</span><input class="input num" id="parAdd" inputmode="decimal" value="' + cfg.correction.add + '"></label>' +
+      '<label class="field" style="flex:1"><span>then multiply by</span><input class="input num" id="parMult" inputmode="decimal" value="' + cfg.correction.mult + '"></label></div>' +
+      '<p class="hint" style="margin:-6px 0 10px">Type the meter\'s own number at every step; the app applies the correction. All distances are in cm. Depth is from the water surface to the sensor.</p>' +
+      '<h2 style="font-size:var(--fs-md);margin:4px 0">Where to measure</h2><div id="parPos"></div>' +
+      '<button class="btn small" id="parAddPos" style="margin:6px 0 10px">Add a position</button>' +
+      '<p class="hint" id="parCount"></p><p class="err" id="parErr"></p>' +
+      '<div class="btn-row"><button class="btn" id="parWarm">Warm up: all at 100%</button></div>' +
+      '<div class="btn-row" style="margin-top:8px"><button class="btn quiet" data-close>Close</button>' +
+      (taken ? '<button class="btn" id="parReset">Start over</button>' : '') +
+      '<button class="btn primary" id="parGo">' + (taken ? 'Continue' : 'Start') + '</button></div>',
+      (body) => {
+        const orig = JSON.stringify(cfg.positions);
+        const draw = () => {
+          $('parPos').innerHTML = posRows(cfg.positions);
+          const changed = JSON.stringify(cfg.positions) !== orig;
+          $('parCount').textContent = nSteps() + ' readings, about ' + Math.round(nSteps() * 25 / 60) + ' minutes.' +
+            (taken && changed ? ' Changing the positions clears the ' + taken + ' readings taken so far.' : '');
+          body.querySelectorAll('.par-pos').forEach((row) => {
+            const i = +row.dataset.i, p = cfg.positions[i];
+            row.querySelector('[data-f="medium"]').addEventListener('change', (e) => {
+              const d = p.medium === 'air' ? p.dist : p.depth;
+              p.medium = e.target.value; delete p.dist; delete p.depth;
+              if (p.medium === 'air') p.dist = d; else p.depth = d;
+              draw();
+            });
+            row.querySelector('[data-f="d"]').addEventListener('change', (e) => { const v = Math.max(0, numOr(e.target.value, 0)); if (p.medium === 'air') p.dist = v; else p.depth = v; draw(); });
+            row.querySelector('[data-f="offset"]').addEventListener('change', (e) => { p.offset = Math.max(0, numOr(e.target.value, 0)); draw(); });
+            row.querySelector('[data-f="ref"]').addEventListener('change', () => { cfg.positions.forEach((q, k) => { q.ref = k === i; }); draw(); });
+            row.querySelector('[data-del]').addEventListener('click', () => { cfg.positions.splice(i, 1); if (!cfg.positions.some((q) => q.ref) && cfg.positions[0]) cfg.positions[0].ref = true; draw(); });
+          });
+        };
+        draw();
+        $('parAddPos').addEventListener('click', () => { cfg.positions.push({ id: 'p' + Date.now(), medium: 'water', depth: 30, offset: 0 }); draw(); });
+        $('parWarm').addEventListener('click', async () => {
+          if (!(await ensureConnected())) return;
+          await parShow(PAR.buildSteps(cfg.model, cfg.positions).find((s) => s.kind === 'all' && s.level === 100).values);
+          toast('All channels at 100%. Keep this screen open for about 10 minutes, then tap Start. Closing it puts the light back.');
+        });
+        const reset = $('parReset');
+        if (reset) reset.addEventListener('click', () => { store.del('parRun:' + state.model); parRestore(); closeSheet(); openParSetup(); });
+        $('parGo').addEventListener('click', async () => {
+          const h = numOr($('parH').value, NaN);
+          if (!(h >= 0)) { $('parErr').textContent = 'Enter the light\'s height above the water.'; return; }
+          if (!cfg.positions.length) { $('parErr').textContent = 'Add at least one position.'; return; }
+          if (!(await ensureConnected())) { $('parErr').textContent = 'Connect to the light first.'; return; }
+          if (JSON.stringify(cfg.positions) !== orig) cfg.readings = {};
+          cfg.lightHeight = h;
+          cfg.correction = { add: numOr($('parAdd').value, 0), mult: numOr($('parMult').value, 1) };
+          saveParRun(cfg);
+          const steps = PAR.buildSteps(cfg.model, cfg.positions);
+          const next = steps.findIndex((s) => cfg.readings[s.key] == null);
+          openParStep(next < 0 ? steps.length : next);
+        });
+      },
+      () => { if (!parStepping) parRestore(); });
+  }
+
+  let parStepping = false;
+  function stepWhat(s) {
+    if (s.kind === 'dark') return 'Everything off';
+    if (s.kind === 'all') return 'All channels at ' + s.level + '%';
+    return channels()[s.ch].name + ' at ' + s.level + '%';
+  }
+
+  function openParStep(i) {
+    const run = parRun();
+    const steps = PAR.buildSteps(run.model, run.positions);
+    if (i >= steps.length) { parStepping = false; return finishPar(); }
+    const s = steps[i];
+    const p = run.positions[s.pos];
+    const moved = i === 0 || steps[i - 1].pos !== s.pos;
+    const prev = run.readings[s.key];
+    const pct = Math.round((i / steps.length) * 100);
+    parStepping = true;
+    openSheet('Reading ' + (i + 1) + ' of ' + steps.length,
+      '<div class="par-progress"><span style="width:' + pct + '%"></span></div>' +
+      '<div class="par-where' + (moved ? ' moved' : '') + '"><span class="hint">' + (moved ? 'Move the meter to' : 'Meter at') + '</span><strong>' + esc(PAR.posLabel(p)) + '</strong></div>' +
+      '<p class="par-what">' + esc(stepWhat(s)) + '</p>' +
+      (s.kind === 'curve' && s.level === PAR.CURVE_LEVELS[0] ? '<p class="hint">Dimming curve for ' + esc(channels()[s.ch].name) + ': the same spot, at lower settings.</p>' : '') +
+      '<label class="field"><span>Meter shows</span><input class="input num par-in" id="parVal" inputmode="decimal" autocomplete="off" value="' + (prev == null ? '' : prev) + '"></label>' +
+      '<p class="hint" id="parNote">' + (s.kind === 'dark' ? 'Light from the room. 0 is fine.' : 'Give it a few seconds to settle. If it jumps around, use the middle of the range.') + '</p>' +
+      '<div class="btn-row"><button class="btn quiet" id="parStop">Stop for now</button>' +
+      '<button class="btn" id="parBack"' + (i === 0 ? ' disabled' : '') + '>Back</button>' +
+      '<button class="btn" id="parSkip">Skip</button>' +
+      '<button class="btn primary" id="parNext">Next</button></div>',
+      (body) => {
+        parShow(s.values).then((ok) => { if (!ok) $('parNote').textContent = 'Not connected to the light: it is not showing this step.'; });
+        const inp = $('parVal');
+        setTimeout(() => inp.focus(), 50);
+        const go = (j) => { parStepping = true; openParStep(j); };
+        const take = () => {
+          const v = numOr(inp.value, NaN);
+          if (!(v >= 0)) { $('parNote').textContent = 'Type the number on the meter, or tap Skip.'; return; }
+          const r = parRun(); r.readings[s.key] = v; saveParRun(r);
+          go(i + 1);
+        };
+        $('parNext').addEventListener('click', take);
+        inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') take(); });
+        $('parSkip').addEventListener('click', () => go(i + 1));
+        $('parBack').addEventListener('click', () => go(i - 1));
+        $('parStop').addEventListener('click', () => { parStepping = false; closeSheet(); toast('Readings kept. Continue any time from Lights & backup.'); });
+      },
+      () => { if (!parStepping) { parRestore(); renderView(); } parStepping = false; });
+    parStepping = false;
+  }
+
+  function finishPar() {
+    parRestore();
+    let cal;
+    try { cal = PAR.fit(parRun()); } catch (e) { toast('Could not calibrate: ' + e.message); return; }
+    store.set('parCal:' + state.model, cal);
+    renderView();
+    openParResults(cal);
+  }
+
+  function openParResults(cal) {
+    const ch = channels();
+    const pc = (x) => Math.round(x * 100) + '%';
+    const allOn = cal.combined[2][1];
+    openSheet('Calibration done',
+      '<p class="sub" style="margin-top:0">The model matches your readings to within about ' + Math.round(cal.rms * 100) + '% on average. Under 10% is good; more usually means a reading was mistyped or the meter moved.</p>' +
+      '<h2 style="font-size:var(--fs-md);margin:8px 0 4px">All channels at 100%</h2>' +
+      '<table class="par-table"><tr><th>Where</th><th>Meter</th><th>Model</th></tr>' +
+      cal.check.map((c) => '<tr><td>' + esc(c.label) + '</td><td class="num">' + Math.round(c.measured) + '</td><td class="num">' + c.predicted + '</td></tr>').join('') + '</table>' +
+      '<p class="hint">With every channel at 100% the light gives ' + pc(allOn) + ' of what the channels add up to on their own' + (allOn < 0.93 ? ': it limits its power or loses output to heat when everything is on.' : '.') + '</p>' +
+      '<h2 style="font-size:var(--fs-md);margin:8px 0 4px">Dimming: share of full output</h2>' +
+      '<table class="par-table"><tr><th></th>' + PAR.CURVE_LEVELS.map((l) => '<th>' + l + '%</th>').join('') + '</tr>' +
+      cal.channels.map((c, i) => '<tr><td style="color:' + ch[i].color + '">' + esc(ch[i].name) + '</td>' +
+        PAR.CURVE_LEVELS.map((l) => { const q = c.curve.find((x) => x[0] === l); return '<td class="num">' + (q ? pc(q[1]) : '') + '</td>'; }).join('') + '</tr>').join('') + '</table>' +
+      '<p class="hint">Save the calibration file and send it to be built into the app, so everyone with this light can use the planner.</p>' +
+      '<div class="btn-row"><button class="btn" data-action="par-export">Save calibration file</button><button class="btn primary" data-action="par-plan">Open planner</button></div>');
+  }
+
+  function parExportText() {
+    return JSON.stringify(Object.assign({}, ownCal(), { checks: parChecks(), raw: parRun() }), null, 2);
+  }
+  function exportPar() {
+    if (!ownCal()) { toast('No calibration on this ' + DEVICE + ' yet.'); return; }
+    const text = parExportText();
+    transport.saveText('reef-light-par-' + state.model + '-' + new Date().toISOString().slice(0, 10) + '.json', text).then(
+      (ok) => { if (ok !== false) toast('Calibration saved.'); },
+      (e) => {
+        if (e.message === 'cancelled') return;
+        transport.copyText(text).then(() => toast('Copied the calibration.'), () => openSheet('Calibration', '<textarea class="input" readonly rows="10">' + esc(text) + '</textarea>'));
+      });
+  }
+  function importPar() {
+    transport.openText().then((text) => {
+      const c = JSON.parse(text);
+      if (!c || c.app !== 'reef-light-par' || !c.channels) throw new Error('This is not a Reef Light PAR calibration.');
+      if (c.model !== state.model) throw new Error('This calibration is for a ' + (c.model === 'mini' ? 'K7 Mini' : 'K7 / K7 Pro') + '.');
+      const keep = Object.assign({}, c); delete keep.raw; delete keep.checks;
+      store.set('parCal:' + state.model, keep);
+      renderView();
+      toast('Calibration loaded.');
+    }).catch((e) => { if (e.message !== 'cancelled') toast('Could not load: ' + e.message); });
+  }
+
+  function openParPlanner() {
+    const cal = parCal();
+    if (!cal) { openParSetup(); return; }
+    const n = channels().length;
+    const pr = Object.assign({ h: cal.lightHeight, depth: 30, offset: 0, target: 250, mixFrom: 'schedule' }, store.get('parPlan', {}));
+    let result = null;
+    openSheet('PAR planner',
+      '<p class="sub" style="margin-top:0">Pick a spot and the PAR you want there. The app keeps your colour mix and works out how bright to run it.</p>' +
+      '<div class="row" style="gap:10px">' +
+      '<label class="field" style="flex:1"><span>Light above water (cm)</span><input class="input num" id="ppH" inputmode="decimal" value="' + pr.h + '"></label>' +
+      '<label class="field" style="flex:1"><span>Depth (cm)</span><input class="input num" id="ppD" inputmode="decimal" value="' + pr.depth + '"></label>' +
+      '<label class="field" style="flex:1"><span>To the side (cm)</span><input class="input num" id="ppO" inputmode="decimal" value="' + pr.offset + '"></label></div>' +
+      '<div class="row" style="gap:10px">' +
+      '<label class="field" style="flex:1"><span>PAR wanted</span><input class="input num" id="ppT" inputmode="decimal" value="' + pr.target + '"></label>' +
+      '<label class="field" style="flex:2"><span>Colour mix</span><select class="input" id="ppMix">' +
+      '<option value="schedule"' + (pr.mixFrom === 'schedule' ? ' selected' : '') + '>My schedule at its brightest</option>' +
+      '<option value="manual"' + (pr.mixFrom === 'manual' ? ' selected' : '') + '>The Manual sliders</option></select></label></div>' +
+      '<div class="par-out" id="ppOut"></div>' +
+      '<div class="btn-row"><button class="btn" id="ppShow">Show on the light</button><button class="btn" id="ppApply">Use for my schedule</button></div>' +
+      '<h2 style="font-size:var(--fs-md);margin:14px 0 4px">Check it with a meter</h2>' +
+      '<div class="row"><input class="input num" id="ppMeas" inputmode="decimal" placeholder="PAR your meter shows" style="flex:1"><button class="btn" id="ppCmp">Compare</button></div>' +
+      '<p class="hint" id="ppCmpOut"></p>' +
+      '<p class="hint">Estimates assume a clear tank and a level sensor; glass walls, white sand and the light\'s age can move the real number by 10 to 20%. Calibrated ' + esc(cal.made) + ' with the light ' + cal.lightHeight + ' cm above the water' + (ownCal() ? ', on this ' + DEVICE : '') + '.</p>',
+      (body) => {
+        const mixNow = () => ($('ppMix').value === 'manual' ? state.manual.slice() : currentMix());
+        const calc = () => {
+          pr.h = numOr($('ppH').value, pr.h); pr.depth = Math.max(0, numOr($('ppD').value, pr.depth));
+          pr.offset = Math.max(0, numOr($('ppO').value, pr.offset)); pr.target = Math.max(0, numOr($('ppT').value, pr.target));
+          pr.mixFrom = $('ppMix').value;
+          store.set('parPlan', pr);
+          const pos = { medium: 'water', depth: pr.depth, offset: pr.offset };
+          result = PAR.plan(cal, pos, pr.target, mixNow(), pr.h);
+          result.pos = pos;
+          const ch = channels();
+          $('ppOut').innerHTML =
+            '<div class="par-big"><span class="num">' + result.predicted + '</span> PAR estimated</div>' +
+            (result.capped ? '<p class="err" style="margin:0 0 6px">This mix tops out at about ' + result.max + ' PAR here. Lower the light, go shallower, or use a brighter mix.</p>'
+              : '<p class="hint" style="margin:0 0 6px">This mix can reach about ' + result.max + ' PAR here.</p>') +
+            '<div class="par-vals">' + ch.map((c, i) => '<span style="--c:' + c.color + '"><b>' + esc(c.name) + '</b><span class="num">' + result.values[i] + '%</span></span>').join('') + '</div>';
+          $('ppApply').disabled = pr.mixFrom !== 'schedule' || naturalOn();
+          $('ppApply').title = naturalOn() ? 'The natural cycle sets the schedule; change its mix instead.' : '';
+        };
+        body.querySelectorAll('input:not(#ppMeas), select').forEach((el) => el.addEventListener('input', calc));
+        calc();
+        $('ppShow').addEventListener('click', () => {
+          for (let i = 0; i < 6; i++) state.manual[i] = i < n ? result.values[i] : 0;
+          setMode(false);
+        });
+        $('ppApply').addEventListener('click', () => {
+          const mix = currentMix(), top = Math.max.apply(null, mix.slice(0, n));
+          const k = top > 0 ? Math.max.apply(null, result.values.slice(0, n)) / top : 1;
+          state.points.forEach((p) => { for (let c = 0; c < n; c++) p.v[c] = Math.max(0, Math.min(100, Math.round(p.v[c] * k))); });
+          persistWorking();
+          closeSheet();
+          switchView('schedule');
+          renderAll();
+          toast('Schedule brightened to ' + result.predicted + ' PAR at its peak. Tap Save to light.');
+        });
+        $('ppCmp').addEventListener('click', () => {
+          const m = numOr($('ppMeas').value, NaN);
+          if (!(m > 0) || !result) return;
+          const off = Math.round(((m - result.predicted) / result.predicted) * 100);
+          const list = parChecks();
+          list.push({ at: new Date().toISOString(), lightHeight: pr.h, pos: result.pos, values: result.values, predicted: result.predicted, measured: m });
+          store.set('parChecks:' + state.model, list);
+          $('ppCmpOut').textContent = 'Meter ' + m + ', estimate ' + result.predicted + ': ' + (Math.abs(off) <= 10 ? 'within ' + Math.abs(off) + '%, as good as the meter.' : (off > 0 ? off + '% more' : -off + '% less') + ' than estimated. Check the depth and height, and that the sensor is level.') + ' Saved with the calibration file.';
+        });
+      });
+  }
+
   // ---- lights & backup view ------------------------------------------------------------------------------
   function renderMore() {
     const v = $('view-more');
@@ -1127,6 +1423,8 @@
         '<div class="btn-row" style="margin-top:8px"><button class="btn" data-action="sync-clock">Set light clock</button></div>'
         : '<p class="hint">No light selected.</p>') +
       '<div class="btn-row" style="margin-top:8px"><button class="btn" data-action="lights">Switch or find lights</button><button class="btn" data-action="wifi-setup">Put a light on WiFi</button></div></div>' +
+
+      parCard() +
 
       '<div class="card"><h2>Backup</h2><p class="sub">Your schedules are also stored on the light itself. A backup file keeps a copy you control.</p>' +
       '<div class="btn-row"><button class="btn" data-action="export">Save backup file</button><button class="btn" data-action="import">Restore backup file</button></div>' +
@@ -1435,6 +1733,10 @@
       renderAll();
     }
     else if (act === 'paste-code') pasteCode();
+    else if (act === 'par-plan') openParPlanner();
+    else if (act === 'par-calibrate') openParSetup();
+    else if (act === 'par-export') exportPar();
+    else if (act === 'par-import') importPar();
     else if (act === 'demo-on') ensureConnected().then((ok) => ok && link.sendAck(P.setDemo(true)).then(() => toast('Demo running on the light.')));
     else if (act === 'demo-off') ensureConnected().then((ok) => ok && link.sendAck(P.setDemo(false)).then(() => toast('Demo stopped.')));
   });
