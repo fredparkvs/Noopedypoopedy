@@ -125,6 +125,14 @@ manual mix on the light, so it survives a power cut.
 save or restore a backup file, rename channels, and see diagnostics (the raw
 bytes the light sent, useful if something looks wrong).
 
+**PAR** (Lights & backup tab). The **PAR planner** answers "I want 250 PAR,
+30 cm deep, 10 cm off centre, with my light 20 cm above the water": it keeps
+your colour mix, works out the channel settings, shows them on the light, and
+can brighten your schedule to match. If you own a PAR meter, **Check it with a
+meter** compares the estimate with your reading. The planner needs a
+calibration of your light type; see [docs/PAR.md](docs/PAR.md) for how to make
+one and how the estimates are worked out.
+
 Channels on the K7 Pro, in order: White, Blue (royal blue), Green, UV, Cyan,
 Red. The K7 Mini has White, Blue, UV. You can rename them.
 
